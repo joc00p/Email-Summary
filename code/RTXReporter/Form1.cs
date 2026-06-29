@@ -10,7 +10,7 @@ namespace RTXReporter;
 public class MainForm : Form
 {
     private readonly OutlookService _outlook = new();
-    private readonly OllamaService _ollama = new();
+    private readonly OllamaService _ollama;
 
     private Dictionary<string, List<EmailItem>> _emailsByWeek = new();
     private readonly Dictionary<string, string> _reportCache = new();
@@ -58,6 +58,8 @@ public class MainForm : Form
 
     public MainForm()
     {
+        _ollama = new OllamaService();
+        _ollama.StatusUpdate += msg => Invoke(() => SetStatus(msg));
         BuildUI();
     }
 

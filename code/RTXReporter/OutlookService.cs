@@ -109,12 +109,10 @@ public class OutlookService
             var line = lines[i].TrimEnd();
             var trimmed = line.TrimStart();
 
-            // Stop at common quote/forward separators
+            // Stop at common Outlook quote/forward separators only
             if (trimmed.StartsWith("-----Original Message-----", StringComparison.OrdinalIgnoreCase) ||
                 trimmed.StartsWith("________________________________", StringComparison.OrdinalIgnoreCase) ||
-                trimmed.StartsWith("From:", StringComparison.OrdinalIgnoreCase) && i > 0 && string.IsNullOrWhiteSpace(lines[i - 1]) ||
-                trimmed.StartsWith(">") ||
-                trimmed.StartsWith("On ") && trimmed.Contains(" wrote:"))
+                (trimmed.StartsWith("On ") && trimmed.Contains(" wrote:")))
                 break;
 
             result.AppendLine(line);

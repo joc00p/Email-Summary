@@ -1,4 +1,6 @@
+using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
@@ -11,56 +13,73 @@ public class OllamaService
 {
     private const string Url = "http://localhost:11434/api/generate";
     private const string Model = "llama3.2";
-    private static readonly HttpClient Http = new() { Timeout = System.TimeSpan.FromMinutes(10) };
+    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromMinutes(10) };
+
+    public event Action<string>? StatusUpdate;
 
     public async Task<string> SummarizeWeekAsync(string weekLabel, List<EmailItem> emails, CancellationToken ct)
     {
-        var blocks = new StringBuilder();
-        for (int i = 0; i < emails.Count; i++)
+        // Group emails by sender, exclude Joel Coopersmith
+        var bySender = emails
+            .Where(e => !e.From.Contains("Coopersmith", StringComparison.OrdinalIgnoreCase))
+            .GroupBy(e => e.From)
+            .OrderBy(g => g.Key)
+            .ToList();
+
+        // Step 1: Summarize each person individually
+        var personSummaries = new List<(string Name, string Summary)>();
+        foreach (var group in bySender)
         {
-            var e = emails[i];
-            var excerpt = e.Body.Length > 3000 ? e.Body[..3000] : e.Body;
-            blocks.AppendLine($"--- Email {i + 1} ---");
-            blocks.AppendLine($"From: {e.From}");
-            blocks.AppendLine($"Subject: {e.Subject}");
-            blocks.AppendLine($"Received: {e.Received}");
-            blocks.AppendLine($"Body:\n{excerpt}");
-            blocks.AppendLine();
+            ct.ThrowIfCancellationRequested();
+            StatusUpdate?.Invoke($"Summarizing {group.Key} ({personSummaries.Count + 1}/{bySender.Count})...");
+
+            var blocks = new StringBuilder();
+            foreach (var e in group)
+            {
+                var excerpt = e.Body.Length > 1500 ? e.Body[..1500] : e.Body;
+                blocks.AppendLine($"Date: {e.Received}");
+                blocks.AppendLine($"Subject: {e.Subject}");
+                blocks.AppendLine(excerpt);
+                blocks.AppendLine();
+            }
+
+            var prompt = $"""
+                You are summarizing work updates from one team member for a status report.
+                Person: {group.Key}
+                Period: {weekLabel}
+
+                Their submitted updates:
+                {blocks}
+
+                Extract ONLY the specific activities, tasks, blockers, and next steps this person mentioned.
+                Output as concise bullet points. No invented content. No intro text. Bullets only.
+                If there is truly nothing substantive, output: (no updates)
+                """;
+
+            var summary = await CallOllama(prompt, ct);
+            if (!string.IsNullOrWhiteSpace(summary) && !summary.Trim().StartsWith("(no updates)"))
+                personSummaries.Add((group.Key, summary.Trim()));
         }
 
-        var prompt = $"""
-            You are a project manager assistant creating a weekly team status report.
+        // Step 2: Build the full report from individual summaries
+        StatusUpdate?.Invoke("Assembling report...");
+        var teamSection = new StringBuilder();
+        foreach (var (name, summary) in personSummaries)
+        {
+            teamSection.AppendLine($"**{name}**");
+            teamSection.AppendLine(summary);
+            teamSection.AppendLine();
+        }
 
-            Week: {weekLabel}
+        // Step 3: Generate summary + executive summary from the assembled sections
+        StatusUpdate?.Invoke("Writing executive summary...");
+        var execPrompt = $"""
+            You are writing the final sections of a team status report for the period: {weekLabel}
 
-            Source data:
+            Individual team member updates:
+            {teamSection}
 
-            {blocks}
-
-            Generate a structured status report using ONLY the following format. Do not mention emails, senders, punch lists, or that this came from emails. Write as if it is an official team report. Exclude any activities or updates from Joel Coopersmith — do not include him in the report at all.
-
-            CRITICAL RULES:
-            - Only include people who have actual, specific activities mentioned in the source data above
-            - Do not invent, infer, or create placeholder sections for anyone
-            - Each real person appears exactly once — consolidate all their activities across all weeks into one section
-            - If a name has no concrete activities, omit them entirely
-            - Do not include Joel Coopersmith under any circumstances
-
-            ---
-
-            ## STATUS REPORT — {weekLabel}
-
-            ### Team Updates
-
-            **[Full Name] — [Role or Area if clearly stated]**
-            - [specific activity or task from the source data]
-            - [specific activity or task from the source data]
-            - [blocker or risk if mentioned]
-            - [next step if mentioned]
-
-            (Repeat only for people with real data — no empty sections, no placeholders)
-
-            ---
+            Write ONLY these two sections exactly as formatted:
 
             ### Summary
             - [overall team progress]
@@ -68,17 +87,35 @@ public class OllamaService
             - [active risks or issues]
             - [items pending]
 
-            ---
-
             ### Executive Summary
-            Write 3-5 sentences in professional prose summarizing the overall state of the team and project for this period. Highlight the most important accomplishments, any critical risks or blockers, and the outlook going forward. This should read as a standalone paragraph suitable for senior leadership.
-
-            ---
-
-            Team Updates and Summary use bullet points only. Executive Summary is prose only. No invented content. Only facts from the source data.
+            [3-5 sentences of professional prose for senior leadership covering accomplishments, risks, and outlook]
             """;
 
-        var payload = JsonSerializer.Serialize(new { model = Model, prompt, stream = false });
+        var execSummary = await CallOllama(execPrompt, ct);
+
+        // Assemble final report
+        var report = new StringBuilder();
+        report.AppendLine($"## STATUS REPORT — {weekLabel}");
+        report.AppendLine();
+        report.AppendLine("### Team Updates");
+        report.AppendLine();
+        report.Append(teamSection);
+        report.AppendLine("---");
+        report.AppendLine();
+        report.AppendLine(execSummary.Trim());
+
+        return report.ToString();
+    }
+
+    private static async Task<string> CallOllama(string prompt, CancellationToken ct)
+    {
+        var payload = JsonSerializer.Serialize(new
+        {
+            model = Model,
+            prompt,
+            stream = false,
+            options = new { num_ctx = 16384 }
+        });
         var content = new StringContent(payload, Encoding.UTF8, "application/json");
         var response = await Http.PostAsync(Url, content, ct);
         response.EnsureSuccessStatusCode();
