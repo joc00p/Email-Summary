@@ -20,9 +20,41 @@ public class MainForm : Form
     private Button _generateBtn = null!;
     private Button _copyBtn = null!;
     private Button _saveBtn = null!;
+    private ThemeToggle _themeToggle = null!;
     private Label _statusLabel = null!;
+    private Label _leftHeader = null!;
+    private Panel _toolbar = null!;
+    private Panel _statusBar = null!;
+    private SplitContainer _split = null!;
     private ProgressBar _progress = null!;
     private CancellationTokenSource? _cts;
+    private bool _isDark = false;
+
+    // Light theme
+    private static readonly Color LightBg         = Color.FromArgb(240, 240, 240);
+    private static readonly Color LightToolbar     = Color.FromArgb(245, 245, 245);
+    private static readonly Color LightStatusBar   = Color.FromArgb(225, 225, 225);
+    private static readonly Color LightStatusText  = Color.FromArgb(60, 60, 60);
+    private static readonly Color LightListBg      = Color.White;
+    private static readonly Color LightListFg      = Color.FromArgb(30, 30, 30);
+    private static readonly Color LightHeaderBg    = Color.FromArgb(210, 220, 235);
+    private static readonly Color LightHeaderFg    = Color.FromArgb(30, 60, 100);
+    private static readonly Color LightReportBg    = Color.White;
+    private static readonly Color LightReportFg    = Color.FromArgb(30, 30, 30);
+    private static readonly Color LightAccent      = Color.FromArgb(0, 84, 166);
+
+    // Dark theme
+    private static readonly Color DarkBg           = Color.FromArgb(22, 22, 22);
+    private static readonly Color DarkToolbar      = Color.FromArgb(30, 30, 30);
+    private static readonly Color DarkStatusBar    = Color.FromArgb(40, 40, 40);
+    private static readonly Color DarkStatusText   = Color.Silver;
+    private static readonly Color DarkListBg       = Color.FromArgb(28, 28, 28);
+    private static readonly Color DarkListFg       = Color.Gainsboro;
+    private static readonly Color DarkHeaderBg     = Color.FromArgb(38, 38, 38);
+    private static readonly Color DarkHeaderFg     = Color.Silver;
+    private static readonly Color DarkReportBg     = Color.FromArgb(18, 18, 18);
+    private static readonly Color DarkReportFg     = Color.FromArgb(220, 220, 220);
+    private static readonly Color DarkAccent       = Color.FromArgb(100, 180, 255);
 
     public MainForm()
     {
@@ -36,11 +68,8 @@ public class MainForm : Form
         MinimumSize = new Size(800, 600);
         StartPosition = FormStartPosition.CenterScreen;
         Font = new Font("Segoe UI", 10f);
-        BackColor = Color.FromArgb(240, 240, 240);
 
-        // Top toolbar
-        var toolbar = new Panel { Dock = DockStyle.Top, Height = 50 };
-        toolbar.BackColor = Color.FromArgb(245, 245, 245);
+        _toolbar = new Panel { Dock = DockStyle.Top, Height = 50 };
 
         _generateBtn = MakeButton("Generate Report", Color.FromArgb(16, 137, 62));
         _generateBtn.Enabled = false;
@@ -54,27 +83,29 @@ public class MainForm : Form
         _saveBtn.Enabled = false;
         _saveBtn.Click += SaveReport_Click;
 
+        _themeToggle = new ThemeToggle { Top = 10 };
+        _themeToggle.ThemeChanged += ThemeBtn_Click;
+
         int x = 10;
         foreach (var btn in new[] { _generateBtn, _copyBtn, _saveBtn })
         {
             btn.Left = x;
             btn.Top = 10;
-            toolbar.Controls.Add(btn);
+            _toolbar.Controls.Add(btn);
             x += btn.Width + 6;
         }
+        _toolbar.Controls.Add(_themeToggle);
+        _toolbar.Resize += (_, _) => _themeToggle.Left = _toolbar.Width - _themeToggle.Width - 10;
 
-        // Status bar
-        var statusBar = new Panel { Dock = DockStyle.Bottom, Height = 28 };
-        statusBar.BackColor = Color.FromArgb(225, 225, 225);
+        _statusBar = new Panel { Dock = DockStyle.Bottom, Height = 28 };
 
         _statusLabel = new Label
         {
             AutoSize = false,
             Dock = DockStyle.Fill,
-            ForeColor = Color.FromArgb(60, 60, 60),
             TextAlign = ContentAlignment.MiddleLeft,
             Padding = new Padding(8, 0, 0, 0),
-            Text = "Ready — click Load Emails to begin."
+            Text = "Loading emails..."
         };
 
         _progress = new ProgressBar
@@ -86,29 +117,24 @@ public class MainForm : Form
             Visible = false
         };
 
-        statusBar.Controls.Add(_statusLabel);
-        statusBar.Controls.Add(_progress);
+        _statusBar.Controls.Add(_statusLabel);
+        _statusBar.Controls.Add(_progress);
 
-        // Split container
-        var split = new SplitContainer
+        _split = new SplitContainer { Dock = DockStyle.Fill };
+
+        Shown += (_, _) =>
         {
-            Dock = DockStyle.Fill,
-            BackColor = Color.FromArgb(240, 240, 240),
-        };
-        Shown += (_, _) => {
-            int dist = Math.Max(split.Panel1MinSize, Math.Min(230, split.Width - split.Panel2MinSize - split.SplitterWidth));
-            split.SplitterDistance = dist;
+            int dist = Math.Max(_split.Panel1MinSize, Math.Min(230, _split.Width - _split.Panel2MinSize - _split.SplitterWidth));
+            _split.SplitterDistance = dist;
+            _themeToggle.Left = _toolbar.Width - _themeToggle.Width - 10;
             LoadEmails_Click(null, EventArgs.Empty);
         };
 
-        // Left panel: week list
-        var leftHeader = new Label
+        _leftHeader = new Label
         {
             Text = "  WEEKS",
             Dock = DockStyle.Top,
             Height = 28,
-            BackColor = Color.FromArgb(210, 220, 235),
-            ForeColor = Color.FromArgb(30, 60, 100),
             TextAlign = ContentAlignment.MiddleLeft,
             Font = new Font("Segoe UI", 8.5f, FontStyle.Bold)
         };
@@ -116,8 +142,6 @@ public class MainForm : Form
         _weekList = new ListBox
         {
             Dock = DockStyle.Fill,
-            BackColor = Color.White,
-            ForeColor = Color.FromArgb(30, 30, 30),
             BorderStyle = BorderStyle.None,
             Font = new Font("Segoe UI", 9.5f),
             ItemHeight = 28,
@@ -125,15 +149,12 @@ public class MainForm : Form
         };
         _weekList.SelectedIndexChanged += WeekList_SelectedIndexChanged;
 
-        split.Panel1.Controls.Add(_weekList);
-        split.Panel1.Controls.Add(leftHeader);
+        _split.Panel1.Controls.Add(_weekList);
+        _split.Panel1.Controls.Add(_leftHeader);
 
-        // Right panel: report text
         _reportBox = new RichTextBox
         {
             Dock = DockStyle.Fill,
-            BackColor = Color.White,
-            ForeColor = Color.FromArgb(30, 30, 30),
             BorderStyle = BorderStyle.None,
             Font = new Font("Segoe UI", 10f),
             ReadOnly = true,
@@ -142,12 +163,56 @@ public class MainForm : Form
             Padding = new Padding(12),
         };
 
-        split.Panel2.Controls.Add(_reportBox);
+        _split.Panel2.Controls.Add(_reportBox);
 
-        Controls.Add(split);
-        Controls.Add(toolbar);
-        Controls.Add(statusBar);
+        Controls.Add(_split);
+        Controls.Add(_toolbar);
+        Controls.Add(_statusBar);
+
+        ApplyTheme();
     }
+
+    private void ThemeBtn_Click(object? sender, EventArgs e)
+    {
+        _isDark = _themeToggle.IsDark;
+        ApplyTheme();
+
+        // Redraw current content with new accent color
+        if (_weekList.SelectedItems.Count > 0)
+            WeekList_SelectedIndexChanged(null, EventArgs.Empty);
+    }
+
+    private void ApplyTheme()
+    {
+        var bg         = _isDark ? DarkBg         : LightBg;
+        var toolbar    = _isDark ? DarkToolbar     : LightToolbar;
+        var statusBar  = _isDark ? DarkStatusBar   : LightStatusBar;
+        var statusText = _isDark ? DarkStatusText  : LightStatusText;
+        var listBg     = _isDark ? DarkListBg      : LightListBg;
+        var listFg     = _isDark ? DarkListFg      : LightListFg;
+        var headerBg   = _isDark ? DarkHeaderBg    : LightHeaderBg;
+        var headerFg   = _isDark ? DarkHeaderFg    : LightHeaderFg;
+        var reportBg   = _isDark ? DarkReportBg    : LightReportBg;
+        var reportFg   = _isDark ? DarkReportFg    : LightReportFg;
+
+        BackColor              = bg;
+        _toolbar.BackColor     = toolbar;
+        _statusBar.BackColor   = statusBar;
+        _statusLabel.ForeColor = statusText;
+        _split.BackColor       = bg;
+        _weekList.BackColor    = listBg;
+        _weekList.ForeColor    = listFg;
+        _leftHeader.BackColor  = headerBg;
+        _leftHeader.ForeColor  = headerFg;
+        _reportBox.BackColor   = reportBg;
+        _reportBox.ForeColor   = reportFg;
+
+        _themeToggle.IsDark = _isDark;
+    }
+
+    private Color Accent => _isDark ? DarkAccent : LightAccent;
+    private Color PreviewFg => _isDark ? Color.FromArgb(180, 180, 180) : Color.FromArgb(80, 80, 80);
+    private Color SubtleFg => _isDark ? Color.FromArgb(130, 130, 130) : Color.FromArgb(120, 120, 120);
 
     private static Button MakeButton(string text, Color backColor) => new()
     {
@@ -171,7 +236,6 @@ public class MainForm : Form
         _copyBtn.Enabled = false;
         _saveBtn.Enabled = false;
         _reportCache.Clear();
-
 
         try
         {
@@ -200,7 +264,6 @@ public class MainForm : Form
         if (count == 0) return;
         _generateBtn.Enabled = true;
 
-        // If exactly one week selected and cached, show full report
         if (count == 1 && _weekList.SelectedItems[0] is string week && _reportCache.TryGetValue(week, out var cached))
         {
             ShowReport(cached);
@@ -208,7 +271,6 @@ public class MainForm : Form
             return;
         }
 
-        // Otherwise show email previews for all selected weeks
         var selectedWeeks = new List<string>();
         foreach (var item in _weekList.SelectedItems)
             if (item is string w) selectedWeeks.Add(w);
@@ -219,28 +281,25 @@ public class MainForm : Form
     private void ShowEmailPreviews(List<string> weeks)
     {
         _reportBox.Clear();
-        _reportBox.ForeColor = Color.FromArgb(30, 30, 30);
+        _reportBox.ForeColor = _isDark ? DarkReportFg : LightReportFg;
 
         foreach (var week in weeks)
         {
             if (!_emailsByWeek.TryGetValue(week, out var emails)) continue;
 
-            // Week header
             _reportBox.SelectionFont = new Font("Segoe UI", 11f, FontStyle.Bold);
-            _reportBox.SelectionColor = Color.FromArgb(0, 84, 166);
+            _reportBox.SelectionColor = Accent;
             _reportBox.AppendText($"{week}  ({emails.Count} email{(emails.Count != 1 ? "s" : "")})\n");
 
             foreach (var email in emails)
             {
-                // Email subject line + date
                 _reportBox.SelectionFont = new Font("Segoe UI", 9.5f, FontStyle.Bold);
-                _reportBox.SelectionColor = Color.FromArgb(30, 30, 30);
+                _reportBox.SelectionColor = _isDark ? DarkReportFg : LightReportFg;
                 _reportBox.AppendText($"  {email.From}  —  {email.Subject}\n");
                 _reportBox.SelectionFont = new Font("Segoe UI", 8.5f, FontStyle.Italic);
-                _reportBox.SelectionColor = Color.FromArgb(120, 120, 120);
+                _reportBox.SelectionColor = SubtleFg;
                 _reportBox.AppendText($"    Received: {email.Received}\n");
 
-                // First 4 non-empty lines of body
                 var lines = email.Body.Split('\n');
                 int shown = 0;
                 foreach (var line in lines)
@@ -248,14 +307,12 @@ public class MainForm : Form
                     var trimmed = line.Trim();
                     if (string.IsNullOrWhiteSpace(trimmed)) continue;
                     _reportBox.SelectionFont = new Font("Segoe UI", 9f, FontStyle.Regular);
-                    _reportBox.SelectionColor = Color.FromArgb(80, 80, 80);
+                    _reportBox.SelectionColor = PreviewFg;
                     _reportBox.AppendText($"    {trimmed}\n");
                     if (++shown >= 4) break;
                 }
-
                 _reportBox.AppendText("\n");
             }
-
             _reportBox.AppendText("\n");
         }
 
@@ -276,7 +333,6 @@ public class MainForm : Form
         _cts?.Cancel();
         _cts = new CancellationTokenSource();
 
-        // Combine emails from all selected weeks
         var allEmails = new List<EmailItem>();
         foreach (var w in selectedWeeks)
             if (_emailsByWeek.TryGetValue(w, out var emails)) allEmails.AddRange(emails);
@@ -291,7 +347,6 @@ public class MainForm : Form
         try
         {
             var report = await _ollama.SummarizeWeekAsync(weekLabel, allEmails, _cts.Token);
-            // Cache under a combined key
             string cacheKey = string.Join("|", selectedWeeks);
             _reportCache[cacheKey] = report;
             ShowReport(report);
@@ -318,10 +373,9 @@ public class MainForm : Form
     private void ShowReport(string text)
     {
         _reportBox.Clear();
-        _reportBox.ForeColor = Color.FromArgb(30, 30, 30);
+        _reportBox.ForeColor = _isDark ? DarkReportFg : LightReportFg;
         _reportBox.Text = text;
 
-        // Highlight ## headers and **bold** lines in blue
         int pos = 0;
         string content = _reportBox.Text;
         while (pos < content.Length)
@@ -333,8 +387,8 @@ public class MainForm : Form
             if (line.StartsWith("##") || line.StartsWith("**"))
             {
                 _reportBox.Select(pos, lineEnd - pos);
-                _reportBox.SelectionFont = new Font("Consolas", 10f, FontStyle.Bold);
-                _reportBox.SelectionColor = Color.FromArgb(0, 84, 166);
+                _reportBox.SelectionFont = new Font("Segoe UI", 10f, FontStyle.Bold);
+                _reportBox.SelectionColor = Accent;
             }
 
             pos = lineEnd + 1;
