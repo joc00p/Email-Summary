@@ -320,6 +320,7 @@ public class MainForm : Form
             }
             _reportBox.AppendText("\n");
         }
+        _reportBox.AppendText("\n\n\n");
 
         _reportBox.SelectionStart = 0;
         _reportBox.SelectionLength = 0;
@@ -379,7 +380,7 @@ public class MainForm : Form
     {
         _reportBox.Clear();
         _reportBox.ForeColor = _isDark ? DarkReportFg : LightReportFg;
-        _reportBox.Text = text;
+        _reportBox.Text = text + "\n\n\n";
 
         int pos = 0;
         string content = _reportBox.Text;
