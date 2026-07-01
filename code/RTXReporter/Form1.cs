@@ -11,15 +11,19 @@ public class MainForm : Form
 {
     private readonly OutlookService _outlook = new();
     private readonly OllamaService _ollama;
+    private readonly PowerPointService _pptx = new(
+        @"C:\Users\joel.coopersmith\OneDrive - Accenture\NADC\RTX\Weekly Report Template.pptx");
 
     private Dictionary<string, List<EmailItem>> _emailsByWeek = new();
     private readonly Dictionary<string, string> _reportCache = new();
+    private string _lastWeekLabel = "";
 
     private ListBox _weekList = null!;
     private RichTextBox _reportBox = null!;
     private Button _generateBtn = null!;
     private Button _copyBtn = null!;
     private Button _saveBtn = null!;
+    private Button _pptxBtn = null!;
     private ThemeToggle _themeToggle = null!;
     private Label _statusLabel = null!;
     private Label _leftHeader = null!;
@@ -88,11 +92,15 @@ public class MainForm : Form
         _saveBtn.Enabled = false;
         _saveBtn.Click += SaveReport_Click;
 
+        _pptxBtn = MakeButton("Export PPTX", Color.FromArgb(180, 80, 20));
+        _pptxBtn.Enabled = false;
+        _pptxBtn.Click += ExportPptx_Click;
+
         _themeToggle = new ThemeToggle { Top = 10 };
         _themeToggle.ThemeChanged += ThemeBtn_Click;
 
         int x = 10;
-        foreach (var btn in new[] { reloadBtn, _generateBtn, _copyBtn, _saveBtn })
+        foreach (var btn in new[] { reloadBtn, _generateBtn, _copyBtn, _saveBtn, _pptxBtn })
         {
             btn.Left = x;
             btn.Top = 10;
@@ -356,8 +364,10 @@ public class MainForm : Form
             string cacheKey = string.Join("|", selectedWeeks);
             _reportCache[cacheKey] = report;
             ShowReport(report);
+            _lastWeekLabel = weekLabel;
             _copyBtn.Enabled = true;
             _saveBtn.Enabled = true;
+            _pptxBtn.Enabled = _pptx.TemplateExists;
             SetStatus($"Report ready — {weekLabel}.");
         }
         catch (OperationCanceledException)
@@ -416,6 +426,29 @@ public class MainForm : Form
         };
         if (dlg.ShowDialog() == DialogResult.OK)
             System.IO.File.WriteAllText(dlg.FileName, _reportBox.Text);
+    }
+
+    private void ExportPptx_Click(object? sender, EventArgs e)
+    {
+        var safe = string.Join("_", _lastWeekLabel.Split(System.IO.Path.GetInvalidFileNameChars()));
+        using var dlg = new SaveFileDialog
+        {
+            FileName = $"RTX_{safe}.pptx",
+            Filter = "PowerPoint Presentation|*.pptx|All Files|*.*",
+            Title = "Export PowerPoint Report"
+        };
+        if (dlg.ShowDialog() != DialogResult.OK) return;
+
+        try
+        {
+            _pptx.Export(_lastWeekLabel, _reportBox.Text, dlg.FileName);
+            SetStatus($"PPTX exported: {System.IO.Path.GetFileName(dlg.FileName)}");
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Failed to export PPTX:\n\n{ex.Message}", "Export Error",
+                MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
     }
 
     private void SetBusy(bool busy, string msg)

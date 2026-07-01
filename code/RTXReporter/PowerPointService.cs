@@ -1,0 +1,199 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.IO.Compression;
+using System.Linq;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Xml;
+
+namespace RTXReporter;
+
+public class PowerPointService
+{
+    private readonly string _templatePath;
+    private const string NS = "http://schemas.openxmlformats.org/drawingml/2006/main";
+
+    public PowerPointService(string templatePath)
+    {
+        _templatePath = templatePath;
+    }
+
+    public bool TemplateExists => File.Exists(_templatePath);
+
+    public void Export(string weekLabel, string reportText, string outputPath)
+    {
+        File.Copy(_templatePath, outputPath, overwrite: true);
+
+        using var archive = ZipFile.Open(outputPath, ZipArchiveMode.Update);
+        var entry = archive.GetEntry("ppt/slides/slide1.xml")
+            ?? throw new InvalidOperationException("slide1.xml not found in PPTX.");
+
+        string xmlText;
+        using (var reader = new StreamReader(entry.Open(), Encoding.UTF8))
+            xmlText = reader.ReadToEnd();
+
+        var doc = new XmlDocument();
+        doc.LoadXml(xmlText);
+
+        var nsm = new XmlNamespaceManager(doc.NameTable);
+        nsm.AddNamespace("a", NS);
+        nsm.AddNamespace("p", "http://schemas.openxmlformats.org/presentationml/2006/main");
+
+        UpdateDateShape(doc, nsm, weekLabel);
+        UpdateKeyAccomplishments(doc, nsm, reportText);
+
+        entry.Delete();
+        var newEntry = archive.CreateEntry("ppt/slides/slide1.xml");
+        using var ms = new MemoryStream();
+        var settings = new XmlWriterSettings
+        {
+            Encoding = new UTF8Encoding(false),
+            Indent = false,
+            OmitXmlDeclaration = false,
+        };
+        using (var xw = XmlWriter.Create(ms, settings))
+            doc.Save(xw);
+
+        newEntry.Open().Write(ms.ToArray(), 0, (int)ms.Length);
+    }
+
+    private static void UpdateDateShape(XmlDocument doc, XmlNamespaceManager nsm, string weekLabel)
+    {
+        // Extract the last Sunday/end date from weekLabel like "Week of Jun 23 - Jun 29, 2025"
+        var match = Regex.Match(weekLabel, @"-\s+(\w+ \d+,\s*\d+)");
+        if (!match.Success) return;
+        if (!DateTime.TryParse(match.Groups[1].Value, out var endDate)) return;
+        var dateStr = endDate.ToString("MM/dd/yyyy");
+
+        // Find the text node containing "as of"
+        var textNodes = doc.SelectNodes("//a:t", nsm)!.Cast<XmlNode>()
+            .Where(n => n.InnerText.StartsWith("as of", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        foreach (var t in textNodes)
+            t.InnerText = $"as of {dateStr}";
+    }
+
+    private static void UpdateKeyAccomplishments(XmlDocument doc, XmlNamespaceManager nsm, string reportText)
+    {
+        // Find the table whose first cell header is "Key Accomplishments"
+        XmlNode? kaCell = null;
+        var tables = doc.SelectNodes("//a:tbl", nsm)!.Cast<XmlNode>();
+        foreach (var table in tables)
+        {
+            var firstCellText = string.Concat(
+                table.SelectNodes("a:tr[1]/a:tc[1]//a:t", nsm)!.Cast<XmlNode>().Select(n => n.InnerText));
+            if (!firstCellText.Trim().StartsWith("Key Accomplishments", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var rows = table.SelectNodes("a:tr", nsm)!.Cast<XmlNode>().ToList();
+            if (rows.Count >= 3)
+                kaCell = rows[2].SelectSingleNode("a:tc[1]", nsm);
+            break;
+        }
+
+        if (kaCell == null) return;
+
+        var txBody = kaCell.SelectSingleNode("a:txBody", nsm)!;
+        foreach (var p in txBody.SelectNodes("a:p", nsm)!.Cast<XmlNode>().ToList())
+            txBody.RemoveChild(p);
+
+        var sections = ParseReportSections(reportText);
+        foreach (var (name, bullets) in sections)
+        {
+            txBody.AppendChild(MakeParagraph(doc, name, bold: true));
+            foreach (var bullet in bullets)
+                txBody.AppendChild(MakeParagraph(doc, $"• {bullet}", bold: false));
+            txBody.AppendChild(MakeEmptyParagraph(doc));
+        }
+    }
+
+    private static List<(string Name, List<string> Bullets)> ParseReportSections(string text)
+    {
+        var result = new List<(string, List<string>)>();
+        string? currentName = null;
+        var currentBullets = new List<string>();
+
+        foreach (var rawLine in text.Split('\n'))
+        {
+            var line = rawLine.Trim();
+            if (line.StartsWith("**") && line.EndsWith("**") && line.Length > 4)
+            {
+                if (currentName != null)
+                    result.Add((currentName, currentBullets));
+                currentName = line[2..^2];
+                currentBullets = new List<string>();
+            }
+            else if ((line.StartsWith("- ") || line.StartsWith("• ")) && currentName != null)
+            {
+                currentBullets.Add(line[2..]);
+            }
+        }
+        if (currentName != null)
+            result.Add((currentName, currentBullets));
+
+        return result;
+    }
+
+    private static XmlElement MakeParagraph(XmlDocument doc, string text, bool bold)
+    {
+        var p = doc.CreateElement("a", "p", NS);
+
+        var pPr = doc.CreateElement("a", "pPr", NS);
+        pPr.SetAttribute("lvl", "0");
+        pPr.SetAttribute("algn", "l");
+        AppendChild(pPr, "a", "lnSpc", NS, lnSpc =>
+            AppendChild(lnSpc, "a", "spcPct", NS, x => x.SetAttribute("val", "100000")));
+        AppendChild(pPr, "a", "spcBef", NS, x =>
+            AppendChild(x, "a", "spcPts", NS, y => y.SetAttribute("val", "0")));
+        AppendChild(pPr, "a", "spcAft", NS, x =>
+            AppendChild(x, "a", "spcPts", NS, y => y.SetAttribute("val", "0")));
+        pPr.AppendChild(doc.CreateElement("a", "buNone", NS));
+        p.AppendChild(pPr);
+
+        var r = doc.CreateElement("a", "r", NS);
+        var rPr = doc.CreateElement("a", "rPr", NS);
+        rPr.SetAttribute("lang", "en-US");
+        rPr.SetAttribute("sz", "800");
+        rPr.SetAttribute("b", bold ? "1" : "0");
+        rPr.SetAttribute("i", "0");
+        rPr.SetAttribute("u", "none");
+        rPr.SetAttribute("strike", "noStrike");
+        rPr.SetAttribute("kern", "1200");
+        rPr.SetAttribute("noProof", "0");
+        AppendChild(rPr, "a", "solidFill", NS, fill =>
+            AppendChild(fill, "a", "srgbClr", NS, c => c.SetAttribute("val", "000000")));
+        rPr.AppendChild(doc.CreateElement("a", "effectLst", NS));
+        AppendChild(rPr, "a", "latin", NS, x => x.SetAttribute("typeface", "Aptos"));
+        r.AppendChild(rPr);
+
+        var t = doc.CreateElement("a", "t", NS);
+        t.InnerText = text;
+        r.AppendChild(t);
+        p.AppendChild(r);
+
+        return p;
+    }
+
+    private static XmlElement MakeEmptyParagraph(XmlDocument doc)
+    {
+        var p = doc.CreateElement("a", "p", NS);
+        var endParaRPr = doc.CreateElement("a", "endParaRPr", NS);
+        endParaRPr.SetAttribute("lang", "en-US");
+        endParaRPr.SetAttribute("sz", "800");
+        endParaRPr.SetAttribute("dirty", "0");
+        p.AppendChild(endParaRPr);
+        return p;
+    }
+
+    private static XmlElement AppendChild(XmlNode parent, string prefix, string localName, string ns,
+        Action<XmlElement>? configure = null)
+    {
+        var el = ((XmlDocument)(parent.OwnerDocument ?? (XmlDocument)parent))
+            .CreateElement(prefix, localName, ns);
+        configure?.Invoke(el);
+        parent.AppendChild(el);
+        return el;
+    }
+}
