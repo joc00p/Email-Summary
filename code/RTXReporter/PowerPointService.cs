@@ -131,9 +131,9 @@ public class PowerPointService
             // Bold team header
             txBody.AppendChild(MakeParagraph(doc, team, bold: true));
 
-            foreach (var (_, bullets) in members)
-                foreach (var bullet in bullets)
-                    txBody.AppendChild(MakeParagraph(doc, $"• {bullet}", bold: false));
+            var allBullets = members.SelectMany(m => m.Bullets).Take(6).ToList();
+            foreach (var bullet in allBullets)
+                txBody.AppendChild(MakeParagraph(doc, $"• {bullet}", bold: false));
 
             txBody.AppendChild(MakeEmptyParagraph(doc));
         }
