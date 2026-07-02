@@ -60,10 +60,11 @@ public class PowerPointService
 
     private static void UpdateDateShape(XmlDocument doc, XmlNamespaceManager nsm, string weekLabel)
     {
-        // Extract the last Sunday/end date from weekLabel like "Week of Jun 23 - Jun 29, 2025"
-        var match = Regex.Match(weekLabel, @"-\s+(\w+ \d+,\s*\d+)");
-        if (!match.Success) return;
-        if (!DateTime.TryParse(match.Groups[1].Value, out var endDate)) return;
+        // Extract the end date of the LAST selected week (handles multi-week labels)
+        // weekLabel: "Week of Jun 23 - Jun 29, 2025" or "Week of ... through Week of Jun 23 - Jun 29, 2025"
+        var matches = Regex.Matches(weekLabel, @"-\s+(\w+ \d+,\s*\d+)");
+        if (matches.Count == 0) return;
+        if (!DateTime.TryParse(matches[^1].Groups[1].Value, out var endDate)) return;
         var dateStr = endDate.ToString("MM/dd/yyyy");
 
         // Find the text node containing "as of"
