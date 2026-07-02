@@ -33,31 +33,28 @@ public class PowerPointService
         using (var reader = new StreamReader(entry.Open(), Encoding.UTF8))
             xmlText = reader.ReadToEnd();
 
-        // Replace the "as of" date directly in the raw XML — avoids namespace lookup fragility
-        xmlText = UpdateDateInXml(xmlText, weekLabel);
-
+        // Update Key Accomplishments via DOM
         var doc = new XmlDocument();
         doc.LoadXml(xmlText);
-
         var nsm = new XmlNamespaceManager(doc.NameTable);
         nsm.AddNamespace("a", NS);
         nsm.AddNamespace("p", "http://schemas.openxmlformats.org/presentationml/2006/main");
-
         UpdateKeyAccomplishments(doc, nsm, reportText);
+
+        // Serialize back to string
+        var sb = new StringBuilder();
+        var settings = new XmlWriterSettings { Encoding = new UTF8Encoding(false), Indent = false, OmitXmlDeclaration = false };
+        using (var xw = XmlWriter.Create(sb, settings))
+            doc.Save(xw);
+
+        // Replace the date on the final serialized XML (guaranteed to work after DOM round-trip)
+        var finalXml = UpdateDateInXml(sb.ToString(), weekLabel);
 
         entry.Delete();
         var newEntry = archive.CreateEntry("ppt/slides/slide1.xml");
-        using var ms = new MemoryStream();
-        var settings = new XmlWriterSettings
-        {
-            Encoding = new UTF8Encoding(false),
-            Indent = false,
-            OmitXmlDeclaration = false,
-        };
-        using (var xw = XmlWriter.Create(ms, settings))
-            doc.Save(xw);
-
-        newEntry.Open().Write(ms.ToArray(), 0, (int)ms.Length);
+        using var entryStream = newEntry.Open();
+        var bytes = new UTF8Encoding(false).GetBytes(finalXml);
+        entryStream.Write(bytes, 0, bytes.Length);
     }
 
     private static string UpdateDateInXml(string xmlText, string weekLabel)
