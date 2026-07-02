@@ -51,9 +51,10 @@ public class OllamaService
                 Their submitted updates:
                 {blocks}
 
-                Extract ALL specific activities, tasks, blockers, and next steps this person mentioned.
+                Extract the most important activities, tasks, blockers, and next steps this person mentioned.
                 Output as concise bullet points starting with -. No invented content. No intro text. Bullets only.
-                You MUST produce at least one bullet. If details are sparse, summarize what little was provided.
+                You MUST produce at least one bullet and NO MORE THAN 6 bullets total.
+                If details are sparse, summarize what little was provided.
                 """;
 
             var summary = await CallOllama(prompt, ct);
@@ -64,6 +65,13 @@ public class OllamaService
                 var fallbackLine = group.First().Subject;
                 trimmed = $"- {(string.IsNullOrWhiteSpace(fallbackLine) ? "Updates submitted" : fallbackLine)}";
             }
+            // Hard cap: keep at most 6 bullet lines
+            var bulletLines = trimmed.Split('\n')
+                .Where(l => l.TrimStart().StartsWith('-') || l.TrimStart().StartsWith('•'))
+                .Take(6)
+                .ToList();
+            if (bulletLines.Count > 0)
+                trimmed = string.Join("\n", bulletLines);
             personSummaries.Add((group.Key, trimmed));
         }
 
