@@ -71,7 +71,12 @@ public class OllamaService
                 .Where(l => !l.Contains("Coopersmith", StringComparison.OrdinalIgnoreCase))
                 .Take(6)
                 .ToList();
-            if (bulletLines.Count > 0)
+            if (bulletLines.Count == 0)
+            {
+                var fallbackLine = group.First().Subject;
+                trimmed = $"- {(string.IsNullOrWhiteSpace(fallbackLine) ? "Updates submitted" : fallbackLine)}";
+            }
+            else
                 trimmed = string.Join("\n", bulletLines);
             personSummaries.Add((group.Key, trimmed));
         }

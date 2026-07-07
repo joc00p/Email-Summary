@@ -288,16 +288,21 @@ public class MainForm : Form
         if (count == 0) return;
         _generateBtn.Enabled = true;
 
-        if (count == 1 && _weekList.SelectedItems[0] is string week && _reportCache.TryGetValue(week, out var cached))
-        {
-            ShowReport(cached);
-            SetStatus($"Cached report — {week}.");
-            return;
-        }
-
         var selectedWeeks = new List<string>();
         foreach (var item in _weekList.SelectedItems)
             if (item is string w) selectedWeeks.Add(w);
+
+        _lastWeekLabel = selectedWeeks.Count == 1
+            ? selectedWeeks[0]
+            : $"{selectedWeeks[^1]} through {selectedWeeks[0]}";
+
+        string cacheKey = string.Join("|", selectedWeeks);
+        if (_reportCache.TryGetValue(cacheKey, out var cached))
+        {
+            ShowReport(cached);
+            SetStatus($"Cached report — {_lastWeekLabel}.");
+            return;
+        }
 
         ShowEmailPreviews(selectedWeeks);
     }

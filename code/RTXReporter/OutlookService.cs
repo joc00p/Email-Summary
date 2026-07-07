@@ -57,12 +57,13 @@ public class OutlookService
                 DateTime received = rawTime is double d
                     ? DateTime.FromOADate(d)
                     : Convert.ToDateTime(rawTime);
-                string week = GetWeekLabel(received);
-                if (!byWeek.ContainsKey(week))
-                    byWeek[week] = new List<EmailItem>();
 
                 string body = StripQuotedContent((string)msg.Body ?? "");
                 if (string.IsNullOrWhiteSpace(body)) continue;
+
+                string week = GetWeekLabel(received);
+                if (!byWeek.ContainsKey(week))
+                    byWeek[week] = new List<EmailItem>();
 
                 byWeek[week].Add(new EmailItem(
                     (string)msg.Subject ?? "",

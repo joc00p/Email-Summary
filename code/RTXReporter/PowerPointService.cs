@@ -175,9 +175,9 @@ public class PowerPointService
                 currentName = line[2..^2];
                 currentBullets = new List<string>();
             }
-            else if ((line.StartsWith("- ") || line.StartsWith("• ")) && currentName != null)
+            else if ((line.StartsWith("-") || line.StartsWith("•")) && currentName != null)
             {
-                currentBullets.Add(line[2..]);
+                currentBullets.Add(line.TrimStart('-', '•').TrimStart());
             }
         }
         if (currentName != null)
