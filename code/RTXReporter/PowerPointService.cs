@@ -125,7 +125,7 @@ public class PowerPointService
             const int MaxPerTeam = 5;
             var allBullets = new List<string>();
             foreach (var (_, bullets) in members)
-                allBullets.AddRange(bullets);
+                allBullets.AddRange(bullets.Where(b => !string.IsNullOrWhiteSpace(b)));
             foreach (var bullet in allBullets.Take(MaxPerTeam))
                 txBody.AppendChild(MakeParagraph(doc, $"• {bullet}", bold: false));
 
@@ -164,7 +164,9 @@ public class PowerPointService
             }
             else if ((line.StartsWith("-") || line.StartsWith("•")) && currentName != null)
             {
-                currentBullets.Add(line.TrimStart('-', '•').TrimStart());
+                var bullet = line.TrimStart('-', '•').TrimStart();
+                if (!string.IsNullOrWhiteSpace(bullet))
+                    currentBullets.Add(bullet);
             }
         }
         if (currentName != null)
