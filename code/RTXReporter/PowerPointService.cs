@@ -40,6 +40,7 @@ public class PowerPointService
         nsm.AddNamespace("a", NS);
         nsm.AddNamespace("p", "http://schemas.openxmlformats.org/presentationml/2006/main");
         UpdateKeyAccomplishments(doc, nsm, reportText);
+        UpdateExecutiveSummary(doc, nsm, reportText);
 
         // Serialize to MemoryStream as UTF-8 so the XML declaration is correct
         using var ms = new MemoryStream();
@@ -235,6 +236,60 @@ public class PowerPointService
         endParaRPr.SetAttribute("dirty", "0");
         p.AppendChild(endParaRPr);
         return p;
+    }
+
+    private static void UpdateExecutiveSummary(XmlDocument doc, XmlNamespaceManager nsm, string reportText)
+    {
+        var execText = ParseExecutiveSummary(reportText);
+        if (string.IsNullOrWhiteSpace(execText)) return;
+
+        XmlNode? contentCell = null;
+        foreach (var table in doc.SelectNodes("//a:tbl", nsm)!.Cast<XmlNode>())
+        {
+            var firstCellText = string.Concat(
+                table.SelectNodes("a:tr[1]/a:tc[1]//a:t", nsm)!.Cast<XmlNode>().Select(n => n.InnerText));
+            if (!firstCellText.Trim().StartsWith("Executive Summary", StringComparison.OrdinalIgnoreCase))
+                continue;
+            var rows = table.SelectNodes("a:tr", nsm)!.Cast<XmlNode>().ToList();
+            if (rows.Count >= 2)
+                contentCell = rows[1].SelectSingleNode("a:tc[1]", nsm);
+            break;
+        }
+
+        if (contentCell == null) return;
+
+        var txBody = contentCell.SelectSingleNode("a:txBody", nsm)!;
+        foreach (var p in txBody.SelectNodes("a:p", nsm)!.Cast<XmlNode>().ToList())
+            txBody.RemoveChild(p);
+
+        txBody.AppendChild(MakeParagraph(doc, execText, bold: false));
+        txBody.AppendChild(MakeEmptyParagraph(doc));
+    }
+
+    private static string ParseExecutiveSummary(string text)
+    {
+        bool inExec = false;
+        var sb = new System.Text.StringBuilder();
+        foreach (var rawLine in text.Split('\n'))
+        {
+            var line = rawLine.Trim();
+            if (line.StartsWith("### Executive Summary", StringComparison.OrdinalIgnoreCase) ||
+                line.StartsWith("## Executive Summary", StringComparison.OrdinalIgnoreCase))
+            {
+                inExec = true;
+                continue;
+            }
+            if (inExec)
+            {
+                if (line.StartsWith("#")) break;
+                if (!string.IsNullOrWhiteSpace(line))
+                {
+                    if (sb.Length > 0) sb.Append(' ');
+                    sb.Append(line);
+                }
+            }
+        }
+        return sb.ToString().Trim();
     }
 
     private static XmlElement AppendChild(XmlNode parent, string prefix, string localName, string ns,
