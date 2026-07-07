@@ -134,12 +134,11 @@ public class PowerPointService
             // Bold team header
             txBody.AppendChild(MakeParagraph(doc, team, bold: true));
 
-            // Distribute up to 5 bullets evenly across all members so everyone is represented
+            // Collect all bullets from all members, cap at 5 per tower
             const int MaxPerTeam = 5;
             var allBullets = new List<string>();
-            int perPerson = Math.Max(1, (int)Math.Ceiling((double)MaxPerTeam / members.Count));
             foreach (var (_, bullets) in members)
-                allBullets.AddRange(bullets.Take(perPerson));
+                allBullets.AddRange(bullets);
             foreach (var bullet in allBullets.Take(MaxPerTeam))
                 txBody.AppendChild(MakeParagraph(doc, $"• {bullet}", bold: false));
 
