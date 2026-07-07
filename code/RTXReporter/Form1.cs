@@ -11,8 +11,8 @@ public class MainForm : Form
 {
     private readonly OutlookService _outlook = new();
     private readonly OllamaService _ollama;
-    private readonly PowerPointService _pptx = new(
-        @"C:\Users\joel.coopersmith\OneDrive - Accenture\NADC\RTX\Weekly Report Template.pptx");
+    private readonly TeamConfig _teamConfig = new();
+    private readonly PowerPointService _pptx;
 
     private Dictionary<string, List<EmailItem>> _emailsByWeek = new();
     private readonly Dictionary<string, string> _reportCache = new();
@@ -62,6 +62,9 @@ public class MainForm : Form
 
     public MainForm()
     {
+        _pptx = new PowerPointService(
+            @"C:\Users\joel.coopersmith\OneDrive - Accenture\NADC\RTX\Weekly Report Template.pptx",
+            _teamConfig);
         _ollama = new OllamaService();
         _ollama.StatusUpdate += msg => Invoke(() => SetStatus(msg));
         BuildUI();
@@ -96,11 +99,14 @@ public class MainForm : Form
         _pptxBtn.Enabled = false;
         _pptxBtn.Click += ExportPptx_Click;
 
+        var teamsBtn = MakeButton("Manage Teams", Color.FromArgb(100, 70, 160));
+        teamsBtn.Click += ManageTeams_Click;
+
         _themeToggle = new ThemeToggle { Top = 10 };
         _themeToggle.ThemeChanged += ThemeBtn_Click;
 
         int x = 10;
-        foreach (var btn in new[] { reloadBtn, _generateBtn, _copyBtn, _saveBtn, _pptxBtn })
+        foreach (var btn in new[] { reloadBtn, _generateBtn, _copyBtn, _saveBtn, _pptxBtn, teamsBtn })
         {
             btn.Left = x;
             btn.Top = 10;
@@ -465,6 +471,18 @@ public class MainForm : Form
             MessageBox.Show($"Failed to export PPTX:\n\n{ex.Message}", "Export Error",
                 MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
+    }
+
+    private void ManageTeams_Click(object? sender, EventArgs e)
+    {
+        var senders = _emailsByWeek.Values
+            .SelectMany(emails => emails.Select(em => em.From))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(s => s)
+            .ToList();
+
+        using var dlg = new ManageTeamsForm(_teamConfig, senders);
+        dlg.ShowDialog(this);
     }
 
     private void SetBusy(bool busy, string msg)

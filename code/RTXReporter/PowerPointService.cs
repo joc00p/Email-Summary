@@ -12,11 +12,13 @@ namespace RTXReporter;
 public class PowerPointService
 {
     private readonly string _templatePath;
+    private readonly TeamConfig _teamConfig;
     private const string NS = "http://schemas.openxmlformats.org/drawingml/2006/main";
 
-    public PowerPointService(string templatePath)
+    public PowerPointService(string templatePath, TeamConfig teamConfig)
     {
         _templatePath = templatePath;
+        _teamConfig = teamConfig;
     }
 
     public bool TemplateExists => File.Exists(_templatePath);
@@ -79,26 +81,9 @@ public class PowerPointService
         return xmlText;
     }
 
-    // Maps last-name keywords → team label (case-insensitive substring match on full name)
-    private static readonly (string[] Keywords, string Team)[] TeamMap =
-    [
-        (["cottone", "velaides", "deheer", "aguilera"],             "SAP"),
-        (["olufosoye", "guerrero", "page"],                         "DBA SQL"),
-        (["villa", "monday", "adams", "yosick", "mcmillan",
-          "leonhartsberger", "bishop", "el faiz", "corredor", "herbert"], "CLOUD"),
-        (["hamby"],                                                  "ITIL Svc Mgmt"),
-    ];
+    private string GetTeam(string personName) => _teamConfig.GetTeam(personName);
 
-    private static string GetTeam(string personName)
-    {
-        var lower = personName.ToLowerInvariant();
-        foreach (var (keywords, team) in TeamMap)
-            if (keywords.Any(k => lower.Contains(k)))
-                return team;
-        return "Other";
-    }
-
-    private static void UpdateKeyAccomplishments(XmlDocument doc, XmlNamespaceManager nsm, string reportText)
+    private void UpdateKeyAccomplishments(XmlDocument doc, XmlNamespaceManager nsm, string reportText)
     {
         // Find the table whose first cell header is "Key Accomplishments"
         XmlNode? kaCell = null;
@@ -124,7 +109,7 @@ public class PowerPointService
 
         // Group parsed sections by team, preserving team order
         var sections = ParseReportSections(reportText);
-        var teamOrder = new[] { "SAP", "DBA SQL", "CLOUD", "ITIL Svc Mgmt", "Other" };
+        var teamOrder = TeamConfig.TowerNames.Append("Other").ToArray();
         var byTeam = sections.GroupBy(s => GetTeam(s.Name))
                              .ToDictionary(g => g.Key, g => g.ToList());
 
@@ -238,7 +223,7 @@ public class PowerPointService
         return p;
     }
 
-    private static void UpdateExecutiveSummary(XmlDocument doc, XmlNamespaceManager nsm, string reportText)
+    private void UpdateExecutiveSummary(XmlDocument doc, XmlNamespaceManager nsm, string reportText)
     {
         var execText = ParseExecutiveSummary(reportText);
         if (string.IsNullOrWhiteSpace(execText)) return;
