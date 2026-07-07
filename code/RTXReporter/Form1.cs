@@ -170,7 +170,7 @@ public class MainForm : Form
             Dock = DockStyle.Fill,
             BorderStyle = BorderStyle.None,
             Font = new Font("Segoe UI", 10f),
-            ReadOnly = true,
+            ReadOnly = false,
             ScrollBars = RichTextBoxScrollBars.Vertical,
             WordWrap = true,
             Padding = new Padding(12),
