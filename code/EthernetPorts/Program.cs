@@ -6,11 +6,475 @@ using System.Windows.Forms;
 
 Application.EnableVisualStyles();
 Application.SetCompatibleTextRenderingDefault(false);
-Application.Run(new MainForm());
+Application.Run(new LauncherForm());
 
-// ── Main window ────────────────────────────────────────────────────────────
+// ── Launcher ───────────────────────────────────────────────────────────────
 
-class MainForm : Form
+class LauncherForm : Form
+{
+    public LauncherForm()
+    {
+        Text = "Network Tools";
+        Size = new(580, 380);
+        FormBorderStyle = FormBorderStyle.FixedSingle;
+        MaximizeBox = false;
+        StartPosition = FormStartPosition.CenterScreen;
+        BackColor = Color.FromArgb(245, 246, 248);
+
+        BuildHeader();
+        BuildCards();
+    }
+
+    void BuildHeader()
+    {
+        Controls.Add(new Panel
+        {
+            Dock = DockStyle.Top,
+            Height = 64,
+            BackColor = Color.FromArgb(40, 40, 60),
+            Controls =
+            {
+                new Label
+                {
+                    Text = "Network Tools",
+                    ForeColor = Color.White,
+                    Font = new Font("Segoe UI", 17f, FontStyle.Bold),
+                    AutoSize = true,
+                    Location = new(20, 16),
+                },
+            },
+        });
+    }
+
+    void BuildCards()
+    {
+        var flow = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            Padding = new(22, 22, 0, 0),
+        };
+
+        foreach (var (title, sub, desc, accent, open) in new (string, string, string, Color, Action)[]
+        {
+            ("PING",        "a Host",          "Test reachability and\nmeasure round-trip\ntime to any hostname\nor IP address.",               Color.FromArgb( 55, 135, 255), () => new PingForm().Show()),
+            ("TRACEROUTE",  "a Host",          "Map each network hop\non the path to a\ndestination and\nmeasure latency.",                    Color.FromArgb( 45, 175,  85), () => new TracerouteForm().Show()),
+            ("INTERFACES",  "Show Interfaces", "View Ethernet interfaces,\nmonitor live traffic\nvolume, and snoop\npackets in real time.",     Color.FromArgb(155,  75, 220), () => new InterfaceForm().Show()),
+        })
+        {
+            flow.Controls.Add(MakeCard(title, sub, desc, accent, open));
+        }
+
+        Controls.Add(flow);
+    }
+
+    static Panel MakeCard(string title, string sub, string desc, Color accent, Action open)
+    {
+        var card = new Panel
+        {
+            Width = 160,
+            Height = 240,
+            Margin = new(0, 0, 16, 0),
+            BackColor = Color.White,
+            Cursor = Cursors.Hand,
+        };
+
+        card.Controls.AddRange([
+            new Label { Text = title,  Font = new Font("Segoe UI", 12f, FontStyle.Bold), ForeColor = accent,                    AutoSize = false, Size = new(140, 26), Location = new(12, 22) },
+            new Label { Text = sub,    Font = new Font("Segoe UI",  9f),                  ForeColor = Color.FromArgb(100,100,120), AutoSize = false, Size = new(140, 20), Location = new(12, 50) },
+            new Label { Text = desc,   Font = new Font("Segoe UI",  8.5f),                ForeColor = Color.FromArgb( 80, 80,100), AutoSize = false, Size = new(136,120), Location = new(12, 80) },
+        ]);
+
+        card.Paint += (_, e) =>
+        {
+            e.Graphics.FillRectangle(new SolidBrush(accent), 0, 0, card.Width, 6);
+            e.Graphics.DrawRectangle(new Pen(Color.FromArgb(215, 215, 220)), 0, 0, card.Width - 1, card.Height - 1);
+        };
+
+        void SetBg(Color c) { card.BackColor = c; foreach (Control ctrl in card.Controls) ctrl.BackColor = c; }
+        card.MouseEnter += (_, _) => SetBg(Color.FromArgb(245, 248, 255));
+        card.MouseLeave += (_, _) => SetBg(Color.White);
+        card.Click += (_, _) => open();
+        foreach (Control c in card.Controls) c.Click += (_, _) => open();
+
+        return card;
+    }
+}
+
+// ── Ping ───────────────────────────────────────────────────────────────────
+
+class PingForm : Form
+{
+    readonly TextBox hostBox = new();
+    readonly Button startStopButton = new();
+    readonly DataGridView grid = new();
+    readonly Label statsLabel = new();
+
+    Thread? pingThread;
+    volatile bool pinging;
+    int sent, received;
+    long totalRtt;
+
+    public PingForm()
+    {
+        Text = "Ping a Host";
+        Size = new(700, 500);
+        MinimumSize = new(500, 350);
+        StartPosition = FormStartPosition.CenterScreen;
+
+        BuildToolbar();
+        BuildGrid();
+        BuildStatusBar();
+    }
+
+    void BuildToolbar()
+    {
+        var toolbar = new Panel { Dock = DockStyle.Top, Height = 48, Padding = new(8, 8, 8, 0) };
+
+        toolbar.Controls.Add(new Label { Text = "Host / IP:", AutoSize = true, Location = new(8, 14) });
+
+        hostBox.Location = new(72, 10);
+        hostBox.Width = 240;
+        hostBox.Font = new Font("Consolas", 10f);
+        hostBox.KeyDown += (_, e) => { if (e.KeyCode == Keys.Enter) Toggle(); };
+        toolbar.Controls.Add(hostBox);
+
+        startStopButton.Text = "Start";
+        startStopButton.Location = new(326, 9);
+        startStopButton.Width = 80;
+        startStopButton.Height = 28;
+        startStopButton.BackColor = Color.FromArgb(60, 160, 80);
+        startStopButton.ForeColor = Color.White;
+        startStopButton.FlatStyle = FlatStyle.Flat;
+        startStopButton.Click += (_, _) => Toggle();
+        toolbar.Controls.Add(startStopButton);
+
+        Controls.Add(toolbar);
+    }
+
+    void BuildGrid()
+    {
+        grid.Dock = DockStyle.Fill;
+        grid.ReadOnly = true;
+        grid.AllowUserToAddRows = false;
+        grid.AllowUserToDeleteRows = false;
+        grid.RowHeadersVisible = false;
+        grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+        grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+        grid.BackgroundColor = SystemColors.Window;
+        grid.BorderStyle = BorderStyle.None;
+        grid.CellBorderStyle = DataGridViewCellBorderStyle.SingleHorizontal;
+        grid.Font = new Font("Consolas", 9.5f);
+        grid.ColumnHeadersDefaultCellStyle.Font = new Font("Segoe UI", 9.5f, FontStyle.Bold);
+        grid.ColumnHeadersHeight = 30;
+        grid.DefaultCellStyle.SelectionBackColor = Color.FromArgb(180, 210, 255);
+        grid.DefaultCellStyle.SelectionForeColor = Color.Black;
+
+        foreach (var (name, weight) in new (string, int)[]
+        {
+            ("Seq", 8), ("Status", 14), ("RTT (ms)", 12), ("TTL", 8), ("From", 30),
+        })
+        {
+            grid.Columns.Add(new DataGridViewTextBoxColumn
+            {
+                HeaderText = name,
+                SortMode = DataGridViewColumnSortMode.NotSortable,
+                FillWeight = weight,
+            });
+        }
+
+        Controls.Add(grid);
+    }
+
+    void BuildStatusBar()
+    {
+        var bar = new Panel { Dock = DockStyle.Bottom, Height = 26, BackColor = SystemColors.ControlLight };
+        statsLabel.AutoSize = true;
+        statsLabel.Location = new(8, 5);
+        statsLabel.ForeColor = SystemColors.ControlDarkDark;
+        bar.Controls.Add(statsLabel);
+        Controls.Add(bar);
+    }
+
+    void Toggle()
+    {
+        if (pinging) StopPing();
+        else StartPing();
+    }
+
+    void StartPing()
+    {
+        var host = hostBox.Text.Trim();
+        if (string.IsNullOrEmpty(host)) return;
+
+        grid.Rows.Clear();
+        sent = received = 0;
+        totalRtt = 0;
+        pinging = true;
+
+        startStopButton.Text = "Stop";
+        startStopButton.BackColor = Color.FromArgb(220, 80, 80);
+        hostBox.Enabled = false;
+
+        pingThread = new Thread(() => PingLoop(host)) { IsBackground = true };
+        pingThread.Start();
+    }
+
+    void StopPing()
+    {
+        pinging = false;
+        startStopButton.Text = "Start";
+        startStopButton.BackColor = Color.FromArgb(60, 160, 80);
+        hostBox.Enabled = true;
+    }
+
+    void PingLoop(string host)
+    {
+        int seq = 1;
+        using var pinger = new Ping();
+        var buffer = new byte[32];
+        var options = new PingOptions { DontFragment = true };
+
+        while (pinging)
+        {
+            PingReply reply;
+            try
+            {
+                reply = pinger.Send(host, 1000, buffer, options);
+            }
+            catch (Exception ex)
+            {
+                int s = seq++;
+                BeginInvoke(() => AddRow(s, "Error", -1, 0, ex.Message));
+                Thread.Sleep(1000);
+                continue;
+            }
+
+            int capturedSeq = seq++;
+            BeginInvoke(() => AddRow(capturedSeq, reply.Status.ToString(),
+                reply.Status == IPStatus.Success ? reply.RoundtripTime : -1,
+                reply.Options?.Ttl ?? 0,
+                reply.Address?.ToString() ?? ""));
+
+            Thread.Sleep(1000);
+        }
+    }
+
+    void AddRow(int seq, string status, long rtt, int ttl, string from)
+    {
+        bool ok = rtt >= 0;
+        sent++;
+        if (ok) { received++; totalRtt += rtt; }
+
+        if (grid.Rows.Count > 500) grid.Rows.RemoveAt(0);
+
+        int row = grid.Rows.Add(seq, status, ok ? rtt.ToString() : "—", ttl > 0 ? ttl.ToString() : "—", from);
+        grid.Rows[row].DefaultCellStyle.BackColor = ok
+            ? Color.FromArgb(220, 245, 220)
+            : Color.FromArgb(245, 220, 220);
+        grid.FirstDisplayedScrollingRowIndex = grid.Rows.Count - 1;
+
+        int lost = sent - received;
+        double lostPct = sent > 0 ? (double)lost / sent * 100 : 0;
+        long avgRtt = received > 0 ? totalRtt / received : 0;
+        statsLabel.Text = $"Sent: {sent}  |  Received: {received}  |  Lost: {lost} ({lostPct:F0}%)  |  Avg RTT: {avgRtt} ms";
+    }
+}
+
+// ── Traceroute ─────────────────────────────────────────────────────────────
+
+class TracerouteForm : Form
+{
+    readonly TextBox hostBox = new();
+    readonly Button startStopButton = new();
+    readonly DataGridView grid = new();
+    readonly Label statusLabel = new();
+
+    Thread? traceThread;
+    volatile bool tracing;
+
+    public TracerouteForm()
+    {
+        Text = "Traceroute a Host";
+        Size = new(820, 500);
+        MinimumSize = new(600, 350);
+        StartPosition = FormStartPosition.CenterScreen;
+
+        BuildToolbar();
+        BuildGrid();
+        BuildStatusBar();
+    }
+
+    void BuildToolbar()
+    {
+        var toolbar = new Panel { Dock = DockStyle.Top, Height = 48, Padding = new(8, 8, 8, 0) };
+
+        toolbar.Controls.Add(new Label { Text = "Host / IP:", AutoSize = true, Location = new(8, 14) });
+
+        hostBox.Location = new(72, 10);
+        hostBox.Width = 240;
+        hostBox.Font = new Font("Consolas", 10f);
+        hostBox.KeyDown += (_, e) => { if (e.KeyCode == Keys.Enter) Toggle(); };
+        toolbar.Controls.Add(hostBox);
+
+        startStopButton.Text = "Start";
+        startStopButton.Location = new(326, 9);
+        startStopButton.Width = 80;
+        startStopButton.Height = 28;
+        startStopButton.BackColor = Color.FromArgb(60, 160, 80);
+        startStopButton.ForeColor = Color.White;
+        startStopButton.FlatStyle = FlatStyle.Flat;
+        startStopButton.Click += (_, _) => Toggle();
+        toolbar.Controls.Add(startStopButton);
+
+        Controls.Add(toolbar);
+    }
+
+    void BuildGrid()
+    {
+        grid.Dock = DockStyle.Fill;
+        grid.ReadOnly = true;
+        grid.AllowUserToAddRows = false;
+        grid.AllowUserToDeleteRows = false;
+        grid.RowHeadersVisible = false;
+        grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+        grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+        grid.BackgroundColor = SystemColors.Window;
+        grid.BorderStyle = BorderStyle.None;
+        grid.CellBorderStyle = DataGridViewCellBorderStyle.SingleHorizontal;
+        grid.Font = new Font("Consolas", 9.5f);
+        grid.ColumnHeadersDefaultCellStyle.Font = new Font("Segoe UI", 9.5f, FontStyle.Bold);
+        grid.ColumnHeadersHeight = 30;
+        grid.DefaultCellStyle.SelectionBackColor = Color.FromArgb(180, 210, 255);
+        grid.DefaultCellStyle.SelectionForeColor = Color.Black;
+
+        foreach (var (name, weight) in new (string, int)[]
+        {
+            ("Hop", 5), ("IP Address", 18), ("Hostname", 32), ("RTT 1", 10), ("RTT 2", 10), ("RTT 3", 10),
+        })
+        {
+            grid.Columns.Add(new DataGridViewTextBoxColumn
+            {
+                HeaderText = name,
+                SortMode = DataGridViewColumnSortMode.NotSortable,
+                FillWeight = weight,
+            });
+        }
+
+        Controls.Add(grid);
+    }
+
+    void BuildStatusBar()
+    {
+        var bar = new Panel { Dock = DockStyle.Bottom, Height = 26, BackColor = SystemColors.ControlLight };
+        statusLabel.AutoSize = true;
+        statusLabel.Location = new(8, 5);
+        statusLabel.ForeColor = SystemColors.ControlDarkDark;
+        statusLabel.Text = "Enter a host and press Start.";
+        bar.Controls.Add(statusLabel);
+        Controls.Add(bar);
+    }
+
+    void Toggle()
+    {
+        if (tracing) StopTrace();
+        else StartTrace();
+    }
+
+    void StartTrace()
+    {
+        var host = hostBox.Text.Trim();
+        if (string.IsNullOrEmpty(host)) return;
+
+        grid.Rows.Clear();
+        tracing = true;
+        hostBox.Enabled = false;
+        startStopButton.Text = "Stop";
+        startStopButton.BackColor = Color.FromArgb(220, 80, 80);
+
+        traceThread = new Thread(() => TraceLoop(host)) { IsBackground = true };
+        traceThread.Start();
+    }
+
+    void StopTrace()
+    {
+        tracing = false;
+        startStopButton.Text = "Start";
+        startStopButton.BackColor = Color.FromArgb(60, 160, 80);
+        hostBox.Enabled = true;
+    }
+
+    void TraceLoop(string host)
+    {
+        using var pinger = new Ping();
+        var buffer = new byte[32];
+
+        for (int ttl = 1; ttl <= 30 && tracing; ttl++)
+        {
+            var options = new PingOptions { Ttl = ttl, DontFragment = true };
+            long[] rtts = [-1, -1, -1];
+            string hopIp = "*";
+            bool reached = false;
+
+            for (int probe = 0; probe < 3 && tracing; probe++)
+            {
+                try
+                {
+                    var reply = pinger.Send(host, 2000, buffer, options);
+                    if (reply.Status is IPStatus.TtlExpired or IPStatus.Success)
+                    {
+                        hopIp = reply.Address.ToString();
+                        rtts[probe] = reply.RoundtripTime;
+                        if (reply.Status == IPStatus.Success) reached = true;
+                    }
+                }
+                catch { }
+            }
+
+            string hostname = hopIp;
+            if (hopIp != "*")
+            {
+                try { hostname = Dns.GetHostEntry(hopIp).HostName; }
+                catch { }
+            }
+
+            int hop = ttl;
+            string ip = hopIp, hn = hostname;
+            long[] r = [.. rtts];
+            bool done = reached;
+            BeginInvoke(() => AddHopRow(hop, ip, hn, r, done));
+
+            if (reached) break;
+        }
+
+        BeginInvoke(() =>
+        {
+            tracing = false;
+            startStopButton.Text = "Start";
+            startStopButton.BackColor = Color.FromArgb(60, 160, 80);
+            hostBox.Enabled = true;
+            statusLabel.Text = "Trace complete.";
+        });
+    }
+
+    void AddHopRow(int hop, string ip, string hostname, long[] rtts, bool reached)
+    {
+        static string Fmt(long rtt) => rtt >= 0 ? $"{rtt} ms" : "*";
+
+        int row = grid.Rows.Add(hop, ip, hostname != ip ? hostname : "—", Fmt(rtts[0]), Fmt(rtts[1]), Fmt(rtts[2]));
+        grid.Rows[row].DefaultCellStyle.BackColor = reached
+            ? Color.FromArgb(220, 245, 220)
+            : ip == "*" ? Color.FromArgb(250, 250, 250) : Color.FromArgb(245, 246, 248);
+
+        grid.FirstDisplayedScrollingRowIndex = grid.Rows.Count - 1;
+        statusLabel.Text = reached ? $"Reached {ip} in {hop} hop(s)." : $"Tracing... hop {hop}";
+    }
+}
+
+// ── Interfaces ─────────────────────────────────────────────────────────────
+
+class InterfaceForm : Form
 {
     readonly DataGridView grid = new();
     readonly Label lastRefreshedLabel = new();
@@ -23,9 +487,9 @@ class MainForm : Form
     readonly Label lblRecv = new();
     readonly Label lblSent = new();
 
-    public MainForm()
+    public InterfaceForm()
     {
-        Text = "Ethernet Port Monitor";
+        Text = "Ethernet Interface Monitor";
         Size = new(1100, 440);
         MinimumSize = new(700, 300);
         StartPosition = FormStartPosition.CenterScreen;
@@ -38,7 +502,7 @@ class MainForm : Form
         grid.CellDoubleClick += OnCellDoubleClick;
 
         pollTimer.Tick += (_, _) => Refresh();
-        SetInterval(5000);
+        SetInterval(1000);
         Refresh();
     }
 
@@ -70,7 +534,7 @@ class MainForm : Form
         var boldFont  = new Font("Segoe UI", 9f, FontStyle.Bold);
         var valueFont = new Font("Segoe UI", 9f);
 
-        var left  = new FlowLayoutPanel { Dock = DockStyle.Fill,  FlowDirection = FlowDirection.LeftToRight,  WrapContents = false, Padding = new(8, 0, 0, 0) };
+        var left  = new FlowLayoutPanel { Dock = DockStyle.Fill,  FlowDirection = FlowDirection.LeftToRight, WrapContents = false, Padding = new(8, 0, 0, 0) };
         var right = new FlowLayoutPanel { Dock = DockStyle.Right, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, Padding = new(0, 0, 12, 0), AutoSize = true };
 
         void AddSep(FlowLayoutPanel panel) => panel.Controls.Add(new Label
@@ -81,20 +545,13 @@ class MainForm : Form
 
         void AddPair(FlowLayoutPanel panel, string key, Label valLbl, string initial)
         {
-            panel.Controls.Add(new Label
-            {
-                Text = key, Font = boldFont, ForeColor = Color.FromArgb(90, 90, 110),
-                AutoSize = true, Margin = new(0, 9, 5, 0),
-            });
-            valLbl.Text = initial;
-            valLbl.Font = valueFont;
-            valLbl.ForeColor = Color.FromArgb(30, 30, 30);
-            valLbl.AutoSize = true;
-            valLbl.Margin = new(0, 9, 0, 0);
+            panel.Controls.Add(new Label { Text = key, Font = boldFont, ForeColor = Color.FromArgb(90, 90, 110), AutoSize = true, Margin = new(0, 9, 5, 0) });
+            valLbl.Text = initial; valLbl.Font = valueFont; valLbl.ForeColor = Color.FromArgb(30, 30, 30);
+            valLbl.AutoSize = true; valLbl.Margin = new(0, 9, 0, 0);
             panel.Controls.Add(valLbl);
         }
 
-        AddPair(left, "Host:", lblHost, System.Net.Dns.GetHostName());
+        AddPair(left, "Host:", lblHost, Dns.GetHostName());
         AddSep(left);
         AddPair(left, "Up:",   lblUp,   "—");
         AddSep(left);
@@ -104,7 +561,6 @@ class MainForm : Form
         AddSep(right);
         AddPair(right, "↑ Sent:", lblSent, "—");
 
-        // Right must be added before Fill so docking resolves correctly
         bar.Controls.Add(right);
         bar.Controls.Add(left);
         Controls.Add(bar);
@@ -242,7 +698,7 @@ class MainForm : Form
                     {
                         double elapsed = (now - prev.when).TotalSeconds;
                         recvStr = FormatRate((stats.BytesReceived - prev.recv) / elapsed);
-                        sentStr = FormatRate((stats.BytesSent - prev.sent) / elapsed);
+                        sentStr = FormatRate((stats.BytesSent     - prev.sent) / elapsed);
                     }
                     prevStats[nic.Name] = (stats.BytesSent, stats.BytesReceived, now);
                 }
@@ -254,8 +710,7 @@ class MainForm : Form
                 ? Color.FromArgb(220, 245, 220)
                 : Color.FromArgb(245, 220, 220);
 
-            var tip = isUp ? "Double-click to snoop traffic" : "";
-            grid.Rows[row].Cells[0].ToolTipText = tip;
+            if (isUp) grid.Rows[row].Cells[0].ToolTipText = "Double-click to snoop traffic";
         }
 
         int upCount   = nics.Count(n => n.OperationalStatus == OperationalStatus.Up);
@@ -278,9 +733,9 @@ class MainForm : Form
         }
 
         lblUp.Text    = upCount.ToString();
-        lblUp.ForeColor = upCount > 0 ? Color.FromArgb(120, 230, 120) : Color.White;
+        lblUp.ForeColor   = upCount   > 0 ? Color.FromArgb(120, 230, 120) : Color.FromArgb(30, 30, 30);
         lblDown.Text  = downCount.ToString();
-        lblDown.ForeColor = downCount > 0 ? Color.FromArgb(255, 120, 120) : Color.White;
+        lblDown.ForeColor = downCount > 0 ? Color.FromArgb(255, 120, 120) : Color.FromArgb(30, 30, 30);
         lblRecv.Text  = totalRecv > 0 ? FormatRate(totalRecv) : "—";
         lblSent.Text  = totalSent > 0 ? FormatRate(totalSent) : "—";
 
@@ -289,14 +744,14 @@ class MainForm : Form
 
     static string FormatRate(double bytesPerSec) => bytesPerSec switch
     {
-        < 0            => "—",
-        >= 1_048_576   => $"{bytesPerSec / 1_048_576:F1} MB/s",
-        >= 1_024       => $"{bytesPerSec / 1_024:F1} KB/s",
-        _              => $"{bytesPerSec:F0} B/s",
+        < 0          => "—",
+        >= 1_048_576 => $"{bytesPerSec / 1_048_576:F1} MB/s",
+        >= 1_024     => $"{bytesPerSec / 1_024:F1} KB/s",
+        _            => $"{bytesPerSec:F0} B/s",
     };
 }
 
-// ── Sniffer window ─────────────────────────────────────────────────────────
+// ── Sniffer ────────────────────────────────────────────────────────────────
 
 class SnifferForm : Form
 {
@@ -509,10 +964,8 @@ class SnifferForm : Form
 
     void OnToggleClick(object? sender, EventArgs e)
     {
-        if (capturing)
-            StopCapture();
-        else
-            StartCapture();
+        if (capturing) StopCapture();
+        else StartCapture();
     }
 
     void StartCapture()
@@ -598,20 +1051,10 @@ class SnifferForm : Form
 
     void AddPacketRow(PacketInfo packet)
     {
-        if (grid.Rows.Count > 5000)
-            grid.Rows.RemoveAt(0);
+        if (grid.Rows.Count > 5000) grid.Rows.RemoveAt(0);
 
-        int row = grid.Rows.Add(
-            packet.Time,
-            packet.Protocol,
-            packet.Source,
-            packet.Destination,
-            packet.Length,
-            packet.Info);
-
+        int row = grid.Rows.Add(packet.Time, packet.Protocol, packet.Source, packet.Destination, packet.Length, packet.Info);
         grid.Rows[row].DefaultCellStyle.BackColor = ProtocolColor(packet.Protocol);
-
-        // Auto-scroll to bottom
         grid.FirstDisplayedScrollingRowIndex = grid.Rows.Count - 1;
 
         packetCount++;
@@ -663,8 +1106,7 @@ static class PacketParser
         if (len < ihl + 20) return null;
         int srcPort = (buf[ihl] << 8) | buf[ihl + 1];
         int dstPort = (buf[ihl + 2] << 8) | buf[ihl + 3];
-        int flags = buf[ihl + 13];
-        var flagStr = TcpFlags(flags);
+        var flagStr = TcpFlags(buf[ihl + 13]);
         return new(time, "TCP", $"{src}:{srcPort}", $"{dst}:{dstPort}", len, flagStr);
     }
 
@@ -673,24 +1115,22 @@ static class PacketParser
         if (len < ihl + 8) return null;
         int srcPort = (buf[ihl] << 8) | buf[ihl + 1];
         int dstPort = (buf[ihl + 2] << 8) | buf[ihl + 3];
-        int udpLen = (buf[ihl + 4] << 8) | buf[ihl + 5];
+        int udpLen  = (buf[ihl + 4] << 8) | buf[ihl + 5];
         return new(time, "UDP", $"{src}:{srcPort}", $"{dst}:{dstPort}", len, $"Len={udpLen}");
     }
 
     static PacketInfo ParseIcmp(byte[] buf, int ihl, int len, string time, string src, string dst)
     {
         if (len < ihl + 4) return new(time, "ICMP", src, dst, len, "");
-        int type = buf[ihl];
-        int code = buf[ihl + 1];
-        var info = (type, code) switch
+        var info = (buf[ihl], buf[ihl + 1]) switch
         {
-            (0, _) => "Echo Reply",
-            (8, _) => "Echo Request (Ping)",
-            (3, 0) => "Dest Unreachable – Net",
-            (3, 1) => "Dest Unreachable – Host",
-            (3, 3) => "Dest Unreachable – Port",
+            (0, _)  => "Echo Reply",
+            (8, _)  => "Echo Request (Ping)",
+            (3, 0)  => "Dest Unreachable – Net",
+            (3, 1)  => "Dest Unreachable – Host",
+            (3, 3)  => "Dest Unreachable – Port",
             (11, _) => "Time Exceeded (TTL)",
-            _ => $"Type={type} Code={code}",
+            var (t, c) => $"Type={t} Code={c}",
         };
         return new(time, "ICMP", src, dst, len, info);
     }
