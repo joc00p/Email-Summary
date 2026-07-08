@@ -768,7 +768,11 @@ class SnifferForm : Form
     readonly Button toggleButton = new();
     readonly Button clearButton = new();
     readonly TextBox filterBox = new();
+    readonly TextBox srcPortBox = new();
+    readonly TextBox dstPortBox = new();
     volatile string filterSnapshot = "";
+    volatile string srcPortSnapshot = "";
+    volatile string dstPortSnapshot = "";
 
     readonly Queue<(DateTime time, string protocol, int bytes)> packetHistory = new();
     readonly object historyLock = new();
@@ -914,12 +918,29 @@ class SnifferForm : Form
         var filterLabel = new Label { Text = "Filter:", AutoSize = true, Location = new(188, 15) };
 
         filterBox.Location = new(230, 11);
-        filterBox.Width = 220;
+        filterBox.Width = 180;
         filterBox.Font = new Font("Consolas", 9.5f);
-        filterBox.PlaceholderText = "IP or protocol (e.g. 192.168 or TCP)";
+        filterBox.PlaceholderText = "IP or protocol";
         filterBox.TextChanged += (_, _) => filterSnapshot = filterBox.Text.Trim();
 
-        toolbar.Controls.AddRange([toggleButton, clearButton, filterLabel, filterBox]);
+        var srcPortLabel = new Label { Text = "Src Port:", AutoSize = true, Location = new(424, 15) };
+
+        srcPortBox.Location = new(490, 11);
+        srcPortBox.Width = 70;
+        srcPortBox.Font = new Font("Consolas", 9.5f);
+        srcPortBox.PlaceholderText = "e.g. 443";
+        srcPortBox.TextChanged += (_, _) => srcPortSnapshot = srcPortBox.Text.Trim();
+
+        var dstPortLabel = new Label { Text = "Dst Port:", AutoSize = true, Location = new(574, 15) };
+
+        dstPortBox.Location = new(640, 11);
+        dstPortBox.Width = 70;
+        dstPortBox.Font = new Font("Consolas", 9.5f);
+        dstPortBox.PlaceholderText = "e.g. 80";
+        dstPortBox.TextChanged += (_, _) => dstPortSnapshot = dstPortBox.Text.Trim();
+
+        toolbar.Controls.AddRange([toggleButton, clearButton, filterLabel, filterBox,
+            srcPortLabel, srcPortBox, dstPortLabel, dstPortBox]);
         Controls.Add(toolbar);
     }
 
@@ -1040,7 +1061,13 @@ class SnifferForm : Form
                 }
 
                 var filter = filterSnapshot;
+                var srcPort = srcPortSnapshot;
+                var dstPort = dstPortSnapshot;
                 if (!string.IsNullOrEmpty(filter) && !PacketMatchesFilter(packet, filter))
+                    continue;
+                if (!string.IsNullOrEmpty(srcPort) && !EndpointHasPort(packet.Source, srcPort))
+                    continue;
+                if (!string.IsNullOrEmpty(dstPort) && !EndpointHasPort(packet.Destination, dstPort))
                     continue;
 
                 BeginInvoke(() => AddPacketRow(packet));
@@ -1055,6 +1082,9 @@ class SnifferForm : Form
         p.Destination.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
         p.Protocol.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
         p.Info.Contains(filter, StringComparison.OrdinalIgnoreCase);
+
+    static bool EndpointHasPort(string endpoint, string port) =>
+        endpoint.EndsWith($":{port}", StringComparison.OrdinalIgnoreCase);
 
     void AddPacketRow(PacketInfo packet)
     {
