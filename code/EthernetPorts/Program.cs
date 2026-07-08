@@ -74,26 +74,21 @@ class MainForm : Form
     {
         var bar = new Panel { Dock = DockStyle.Top, Height = 32, BackColor = Color.FromArgb(245, 246, 248) };
 
-        var flow = new FlowLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            FlowDirection = FlowDirection.LeftToRight,
-            WrapContents = false,
-            Padding = new(8, 0, 0, 0),
-        };
-
         var boldFont  = new Font("Segoe UI", 9f, FontStyle.Bold);
         var valueFont = new Font("Segoe UI", 9f);
 
-        void AddSep() => flow.Controls.Add(new Label
+        var left  = new FlowLayoutPanel { Dock = DockStyle.Fill,  FlowDirection = FlowDirection.LeftToRight,  WrapContents = false, Padding = new(8, 0, 0, 0) };
+        var right = new FlowLayoutPanel { Dock = DockStyle.Right, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, Padding = new(0, 0, 12, 0), AutoSize = true };
+
+        void AddSep(FlowLayoutPanel panel) => panel.Controls.Add(new Label
         {
             Text = "|", Font = valueFont, ForeColor = Color.FromArgb(180, 180, 180),
             AutoSize = true, Margin = new(30, 9, 30, 0),
         });
 
-        void AddPair(string key, Label valLbl, string initial, int rightPad = 0)
+        void AddPair(FlowLayoutPanel panel, string key, Label valLbl, string initial)
         {
-            flow.Controls.Add(new Label
+            panel.Controls.Add(new Label
             {
                 Text = key, Font = boldFont, ForeColor = Color.FromArgb(90, 90, 110),
                 AutoSize = true, Margin = new(0, 9, 5, 0),
@@ -102,21 +97,23 @@ class MainForm : Form
             valLbl.Font = valueFont;
             valLbl.ForeColor = Color.FromArgb(30, 30, 30);
             valLbl.AutoSize = true;
-            valLbl.Margin = new(0, 9, rightPad, 0);
-            flow.Controls.Add(valLbl);
+            valLbl.Margin = new(0, 9, 0, 0);
+            panel.Controls.Add(valLbl);
         }
 
-        AddPair("Host:", lblHost, System.Net.Dns.GetHostName());
-        AddSep();
-        AddPair("Up:", lblUp, "—");
-        AddSep();
-        AddPair("Down:", lblDown, "—");
-        AddSep();
-        AddPair("↓ Recv:", lblRecv, "—");
-        AddSep();
-        AddPair("↑ Sent:", lblSent, "—");
+        AddPair(left, "Host:", lblHost, System.Net.Dns.GetHostName());
+        AddSep(left);
+        AddPair(left, "Up:",   lblUp,   "—");
+        AddSep(left);
+        AddPair(left, "Down:", lblDown, "—");
 
-        bar.Controls.Add(flow);
+        AddPair(right, "↓ Recv:", lblRecv, "—");
+        AddSep(right);
+        AddPair(right, "↑ Sent:", lblSent, "—");
+
+        // Right must be added before Fill so docking resolves correctly
+        bar.Controls.Add(right);
+        bar.Controls.Add(left);
         Controls.Add(bar);
     }
 
