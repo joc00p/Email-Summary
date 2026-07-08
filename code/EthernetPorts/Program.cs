@@ -509,7 +509,8 @@ class InterfaceForm : Form
 
         grid.CellDoubleClick += OnCellDoubleClick;
 
-        pollTimer.Tick += (_, _) => Refresh();
+        pollTimer.Tick += (_, _) => { if (!IsDisposed) Refresh(); };
+        FormClosing += (_, _) => pollTimer.Stop();
         SetInterval(1000);
         Refresh();
     }
