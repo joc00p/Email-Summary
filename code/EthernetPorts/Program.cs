@@ -310,17 +310,20 @@ class SnifferForm : Form
     readonly string nicName;
     readonly IPAddress bindIp;
     readonly DataGridView grid = new();
+    readonly Panel trafficPanel = new();
     readonly Label statusLabel = new();
     readonly Button toggleButton = new();
     readonly Button clearButton = new();
     readonly TextBox filterBox = new();
 
+    readonly Queue<(DateTime time, string protocol, int bytes)> packetHistory = new();
+    readonly object historyLock = new();
+    readonly System.Windows.Forms.Timer renderTimer = new() { Interval = 500 };
+
     Socket? rawSocket;
     Thread? captureThread;
     volatile bool capturing;
     int packetCount;
-
-    static readonly Color[] ProtocolColors = [];
 
     public SnifferForm(string nicName, IPAddress bindIp)
     {
@@ -328,16 +331,106 @@ class SnifferForm : Form
         this.bindIp = bindIp;
 
         Text = $"Traffic Sniffer — {nicName} ({bindIp})";
-        Size = new(1050, 520);
-        MinimumSize = new(700, 350);
+        Size = new(1050, 580);
+        MinimumSize = new(700, 420);
         StartPosition = FormStartPosition.CenterParent;
 
+        BuildTrafficBars();
         BuildToolbar();
         BuildGrid();
         BuildStatusBar();
 
-        FormClosing += (_, _) => StopCapture();
+        FormClosing += (_, _) => { StopCapture(); renderTimer.Stop(); };
         StartCapture();
+    }
+
+    void BuildTrafficBars()
+    {
+        trafficPanel.Dock = DockStyle.Top;
+        trafficPanel.Height = 70;
+        trafficPanel.BackColor = Color.FromArgb(22, 22, 35);
+        trafficPanel.Paint += PaintTrafficBars;
+        renderTimer.Tick += (_, _) => trafficPanel.Invalidate();
+        renderTimer.Start();
+        Controls.Add(trafficPanel);
+    }
+
+    void PaintTrafficBars(object? sender, PaintEventArgs e)
+    {
+        var g = e.Graphics;
+        int w = trafficPanel.Width;
+        int h = trafficPanel.Height;
+        g.Clear(Color.FromArgb(22, 22, 35));
+
+        const int numBuckets = 60;
+        var tcp   = new int[numBuckets];
+        var udp   = new int[numBuckets];
+        var icmp  = new int[numBuckets];
+        var other = new int[numBuckets];
+
+        var now = DateTime.Now;
+        lock (historyLock)
+        {
+            foreach (var (time, protocol, bytes) in packetHistory)
+            {
+                int age = (int)(now - time).TotalSeconds;
+                if (age >= numBuckets) continue;
+                int b = numBuckets - 1 - age;
+                switch (protocol)
+                {
+                    case "TCP":  tcp[b]   += bytes; break;
+                    case "UDP":  udp[b]   += bytes; break;
+                    case "ICMP": icmp[b]  += bytes; break;
+                    default:     other[b] += bytes; break;
+                }
+            }
+        }
+
+        const int legendH = 16;
+        int chartH = h - legendH;
+        int maxTotal = Enumerable.Range(0, numBuckets)
+            .Select(i => tcp[i] + udp[i] + icmp[i] + other[i])
+            .DefaultIfEmpty(1).Max();
+        if (maxTotal < 1) maxTotal = 1;
+
+        float barW = (float)w / numBuckets;
+        for (int i = 0; i < numBuckets; i++)
+        {
+            float scale = (float)chartH / maxTotal;
+            float x = i * barW;
+            float y = legendH + chartH;
+
+            void DrawSeg(int val, Color color)
+            {
+                if (val <= 0) return;
+                float segH = val * scale;
+                y -= segH;
+                using var br = new SolidBrush(color);
+                g.FillRectangle(br, x, y, Math.Max(barW - 1, 1), segH);
+            }
+
+            DrawSeg(other[i], Color.FromArgb(110, 110, 130));
+            DrawSeg(icmp[i],  Color.FromArgb(230, 175,  50));
+            DrawSeg(udp[i],   Color.FromArgb( 55, 185,  90));
+            DrawSeg(tcp[i],   Color.FromArgb( 55, 135, 255));
+        }
+
+        using var legendFont = new Font("Segoe UI", 7.5f);
+        int lx = 6;
+        foreach (var (label, color) in new (string, Color)[]
+        {
+            ("TCP",   Color.FromArgb( 55, 135, 255)),
+            ("UDP",   Color.FromArgb( 55, 185,  90)),
+            ("ICMP",  Color.FromArgb(230, 175,  50)),
+            ("Other", Color.FromArgb(110, 110, 130)),
+        })
+        {
+            using var br = new SolidBrush(color);
+            g.FillRectangle(br, lx, 4, 8, 8);
+            using var textBr = new SolidBrush(Color.FromArgb(170, 170, 190));
+            g.DrawString(label, legendFont, textBr, lx + 11, 2);
+            lx += TextRenderer.MeasureText(label, legendFont).Width + 20;
+        }
     }
 
     void BuildToolbar()
@@ -357,7 +450,13 @@ class SnifferForm : Form
         clearButton.Location = new(100, 9);
         clearButton.Width = 70;
         clearButton.Height = 28;
-        clearButton.Click += (_, _) => { grid.Rows.Clear(); packetCount = 0; UpdateStatus(); };
+        clearButton.Click += (_, _) =>
+        {
+            grid.Rows.Clear();
+            packetCount = 0;
+            lock (historyLock) packetHistory.Clear();
+            UpdateStatus();
+        };
 
         var filterLabel = new Label { Text = "Filter:", AutoSize = true, Location = new(188, 15) };
 
@@ -477,6 +576,14 @@ class SnifferForm : Form
 
                 var packet = PacketParser.Parse(buffer, len);
                 if (packet == null) continue;
+
+                lock (historyLock)
+                {
+                    var cutoff = DateTime.Now.AddSeconds(-61);
+                    while (packetHistory.Count > 0 && packetHistory.Peek().time < cutoff)
+                        packetHistory.Dequeue();
+                    packetHistory.Enqueue((DateTime.Now, packet.Protocol, packet.Length));
+                }
 
                 var filter = filterBox.Text.Trim();
                 if (!string.IsNullOrEmpty(filter) && !PacketMatchesFilter(packet, filter))
