@@ -344,7 +344,6 @@ class SnifferForm : Form
         trafficPanel.BackColor = Color.FromArgb(22, 22, 35);
         trafficPanel.Paint += PaintTrafficBars;
         renderTimer.Tick += (_, _) => trafficPanel.Invalidate();
-        renderTimer.Start();
         Controls.Add(trafficPanel);
     }
 
@@ -528,6 +527,7 @@ class SnifferForm : Form
             capturing = true;
             captureThread = new Thread(CaptureLoop) { IsBackground = true, Name = "PacketCapture" };
             captureThread.Start();
+            renderTimer.Start();
 
             toggleButton.Text = "Stop";
             toggleButton.BackColor = Color.FromArgb(220, 80, 80);
@@ -542,6 +542,7 @@ class SnifferForm : Form
     void StopCapture()
     {
         capturing = false;
+        renderTimer.Stop();
         try { rawSocket?.Close(); } catch { }
         rawSocket = null;
 
