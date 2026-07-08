@@ -31,8 +31,8 @@ class MainForm : Form
         MinimumSize = new(700, 300);
         StartPosition = FormStartPosition.CenterScreen;
 
-        BuildToolbar();
         BuildSummaryBar();
+        BuildToolbar();
         BuildGrid();
         BuildStatusBar();
 
@@ -72,30 +72,51 @@ class MainForm : Form
 
     void BuildSummaryBar()
     {
-        var bar = new Panel { Dock = DockStyle.Top, Height = 36, BackColor = Color.FromArgb(40, 40, 60) };
+        var bar = new Panel { Dock = DockStyle.Top, Height = 32, BackColor = Color.FromArgb(245, 246, 248) };
 
-        var boldFont = new Font("Segoe UI", 9.5f, FontStyle.Bold);
-        var valueFont = new Font("Segoe UI", 9.5f);
-
-        void AddKey(string text, int x) => bar.Controls.Add(new Label
+        var flow = new FlowLayoutPanel
         {
-            Text = text, Font = boldFont, ForeColor = Color.FromArgb(160, 200, 255),
-            AutoSize = true, Location = new(x, 10),
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            Padding = new(8, 0, 0, 0),
+        };
+
+        var boldFont  = new Font("Segoe UI", 9f, FontStyle.Bold);
+        var valueFont = new Font("Segoe UI", 9f);
+
+        void AddSep() => flow.Controls.Add(new Label
+        {
+            Text = "|", Font = valueFont, ForeColor = Color.FromArgb(180, 180, 180),
+            AutoSize = true, Margin = new(6, 9, 6, 0),
         });
 
-        void AddTile(Label lbl, string initial, int x)
+        void AddPair(string key, Label valLbl, string initial)
         {
-            lbl.Text = initial; lbl.Font = valueFont;
-            lbl.ForeColor = Color.White; lbl.AutoSize = true; lbl.Location = new(x, 10);
-            bar.Controls.Add(lbl);
+            flow.Controls.Add(new Label
+            {
+                Text = key, Font = boldFont, ForeColor = Color.FromArgb(90, 90, 110),
+                AutoSize = true, Margin = new(0, 9, 4, 0),
+            });
+            valLbl.Text = initial;
+            valLbl.Font = valueFont;
+            valLbl.ForeColor = Color.FromArgb(30, 30, 30);
+            valLbl.AutoSize = true;
+            valLbl.Margin = new(0, 9, 0, 0);
+            flow.Controls.Add(valLbl);
         }
 
-        AddKey("Host:", 10);          AddTile(lblHost,  System.Net.Dns.GetHostName(), 50);
-        AddKey("Up:",   240);         AddTile(lblUp,    "—", 268);
-        AddKey("Down:", 310);         AddTile(lblDown,  "—", 350);
-        AddKey("↓ Recv:", 410);       AddTile(lblRecv,  "—", 470);
-        AddKey("↑ Sent:", 550);       AddTile(lblSent,  "—", 608);
+        AddPair("Host:", lblHost, System.Net.Dns.GetHostName());
+        AddSep();
+        AddPair("Up:", lblUp, "—");
+        AddSep();
+        AddPair("Down:", lblDown, "—");
+        AddSep();
+        AddPair("↓ Recv:", lblRecv, "—");
+        AddSep();
+        AddPair("↑ Sent:", lblSent, "—");
 
+        bar.Controls.Add(flow);
         Controls.Add(bar);
     }
 
