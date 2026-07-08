@@ -88,21 +88,21 @@ class MainForm : Form
         void AddSep() => flow.Controls.Add(new Label
         {
             Text = "|", Font = valueFont, ForeColor = Color.FromArgb(180, 180, 180),
-            AutoSize = true, Margin = new(6, 9, 6, 0),
+            AutoSize = true, Margin = new(30, 9, 30, 0),
         });
 
-        void AddPair(string key, Label valLbl, string initial)
+        void AddPair(string key, Label valLbl, string initial, int rightPad = 0)
         {
             flow.Controls.Add(new Label
             {
                 Text = key, Font = boldFont, ForeColor = Color.FromArgb(90, 90, 110),
-                AutoSize = true, Margin = new(0, 9, 4, 0),
+                AutoSize = true, Margin = new(0, 9, 5, 0),
             });
             valLbl.Text = initial;
             valLbl.Font = valueFont;
             valLbl.ForeColor = Color.FromArgb(30, 30, 30);
             valLbl.AutoSize = true;
-            valLbl.Margin = new(0, 9, 0, 0);
+            valLbl.Margin = new(0, 9, rightPad, 0);
             flow.Controls.Add(valLbl);
         }
 
