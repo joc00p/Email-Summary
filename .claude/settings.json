@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "defaultMode": "bypassPermissions",
+    "allow": [
+      "Bash(ollama list)",
+      "Bash(ollama list *)",
+      "Bash(ollama --version)",
+      "Bash(ollama show *)",
+      "Bash(gh repo list *)",
+      "PowerShell(Get-ChildItem *)",
+      "PowerShell(Get-Content *)",
+      "PowerShell(ollama list*)",
+      "PowerShell(ollama --version*)",
+      "PowerShell(gh repo list*)",
+      "PowerShell(gh --version*)",
+      "PowerShell(git --version*)"
+    ]
+  }
+}
