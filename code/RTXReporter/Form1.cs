@@ -65,7 +65,7 @@ public class MainForm : Form
         _pptx = new PowerPointService(
             Path.Combine(AppContext.BaseDirectory, "RTXReport", "RTX TEMPLATE.pptx"),
             _teamConfig);
-        _ollama = new OllamaService();
+        _ollama = new OllamaService(_teamConfig);
         _ollama.StatusUpdate += msg => Invoke(() => SetStatus(msg));
         BuildUI();
     }

@@ -14,6 +14,9 @@ public class OllamaService
     private const string Url = "http://localhost:11434/api/generate";
     private const string Model = "llama3.2";
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromMinutes(10) };
+    private readonly TeamConfig _teamConfig;
+
+    public OllamaService(TeamConfig teamConfig) => _teamConfig = teamConfig;
 
     public event Action<string>? StatusUpdate;
 
@@ -93,15 +96,32 @@ public class OllamaService
             teamSection.AppendLine();
         }
 
-        // Step 3: Generate summary + executive summary from the assembled sections
+        // Step 3: Build a tower-grouped section for the exec prompt (no individual names)
+        var towerOrder = TeamConfig.TowerNames.Append("Other").ToArray();
+        var byTower = personSummaries
+            .GroupBy(p => _teamConfig.GetTeam(p.Name))
+            .ToDictionary(g => g.Key, g => g.ToList());
+
+        var towerSection = new StringBuilder();
+        foreach (var tower in towerOrder)
+        {
+            if (!byTower.TryGetValue(tower, out var members) || members.Count == 0) continue;
+            towerSection.AppendLine($"**{tower}**");
+            foreach (var (_, summary) in members)
+                towerSection.AppendLine(summary);
+            towerSection.AppendLine();
+        }
+
+        // Step 4: Generate summary + executive summary from tower-grouped sections
         StatusUpdate?.Invoke("Writing executive summary...");
         var execPrompt = $"""
             You are writing the final sections of a team status report for the period: {weekLabel}
 
-            Individual team member updates:
-            {teamSection}
+            Tower updates (do NOT mention individual names — refer only to the tower names):
+            {towerSection}
 
             Do NOT use the phrase "punch list" or "punch lists" anywhere in your response.
+            Do NOT mention any individual person's name. Refer only to the tower (SAP, Cloud, DBA SQL, ITIL Svc Mgmt, etc.).
             Write ONLY these two sections exactly as formatted:
 
             ### Summary
@@ -111,7 +131,7 @@ public class OllamaService
             Only add a risks/issues bullet if a risk, blocker, or problem is explicitly stated in the updates above. Do not invent or infer risks.
 
             ### Executive Summary
-            [3-5 sentences of professional prose for senior leadership covering accomplishments and outlook. Only mention risks if they are explicitly stated in the updates above.]
+            [3-5 sentences of professional prose for senior leadership covering accomplishments and outlook by tower. Only mention risks if they are explicitly stated in the updates above. Do not name individuals.]
             """;
 
         var execSummary = await CallOllama(execPrompt, ct);
