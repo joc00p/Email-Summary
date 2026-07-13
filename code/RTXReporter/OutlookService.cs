@@ -78,6 +78,70 @@ public class OutlookService
         return byWeek;
     }
 
+    public List<string> SearchAddressBook(string query, int maxResults = 100)
+    {
+        var results = new List<string>();
+        if (string.IsNullOrWhiteSpace(query) || query.Length < 2) return results;
+
+        try
+        {
+            var outlookType = Type.GetTypeFromProgID("Outlook.Application")
+                ?? throw new InvalidOperationException("Outlook not found.");
+            dynamic outlook = Activator.CreateInstance(outlookType)!;
+            dynamic ns = outlook.GetNamespace("MAPI");
+
+            foreach (dynamic addrList in ns.AddressLists)
+            {
+                try
+                {
+                    dynamic entries = addrList.AddressEntries;
+                    // Try server-side Restrict filter first (fast for GAL)
+                    try
+                    {
+                        string filter = $"[Name] ci_phw '{query}'";
+                        dynamic restricted = entries.Restrict(filter);
+                        foreach (dynamic entry in restricted)
+                        {
+                            try
+                            {
+                                string name = (string)entry.Name;
+                                if (!string.IsNullOrWhiteSpace(name))
+                                    results.Add(name);
+                            }
+                            catch { }
+                            if (results.Count >= maxResults) return Finish(results);
+                        }
+                    }
+                    catch
+                    {
+                        // Fallback: iterate manually (safe for small lists like personal Contacts)
+                        int count = Math.Min((int)entries.Count, 500);
+                        for (int i = 1; i <= count; i++)
+                        {
+                            try
+                            {
+                                dynamic entry = entries[i];
+                                string name = (string)entry.Name;
+                                if (!string.IsNullOrWhiteSpace(name) &&
+                                    name.Contains(query, StringComparison.OrdinalIgnoreCase))
+                                    results.Add(name);
+                            }
+                            catch { }
+                            if (results.Count >= maxResults) return Finish(results);
+                        }
+                    }
+                }
+                catch { }
+            }
+        }
+        catch { }
+
+        return Finish(results);
+
+        static List<string> Finish(List<string> r) =>
+            r.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(n => n).ToList();
+    }
+
     private static dynamic? FindFolder(dynamic parent, string name, StringBuilder log, int depth)
     {
         try

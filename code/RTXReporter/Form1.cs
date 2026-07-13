@@ -489,7 +489,7 @@ public class MainForm : Form
             .OrderBy(s => s)
             .ToList();
 
-        using var dlg = new ManageTeamsForm(_teamConfig, senders);
+        using var dlg = new ManageTeamsForm(_teamConfig, senders, q => _outlook.SearchAddressBook(q));
         dlg.ShowDialog(this);
     }
 

@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace RTXReporter;
@@ -9,18 +11,26 @@ namespace RTXReporter;
 public class ManageTeamsForm : Form
 {
     private readonly TeamConfig _config;
-    private readonly List<string> _outlookUsers;
+    private readonly List<string> _emailSenders;
+    private readonly Func<string, List<string>> _searchAddressBook;
 
     private ComboBox _towerCombo = null!;
     private ListBox _membersBox = null!;
     private ListBox _usersBox = null!;
+    private TextBox _searchBox = null!;
+    private Label _searchStatus = null!;
     private Button _addBtn = null!;
     private Button _removeBtn = null!;
 
-    public ManageTeamsForm(TeamConfig config, IEnumerable<string> outlookUsers)
+    private CancellationTokenSource? _searchCts;
+    private System.Windows.Forms.Timer _debounce = null!;
+
+    public ManageTeamsForm(TeamConfig config, IEnumerable<string> emailSenders,
+        Func<string, List<string>> searchAddressBook)
     {
         _config = config;
-        _outlookUsers = outlookUsers.OrderBy(u => u).ToList();
+        _emailSenders = emailSenders.OrderBy(u => u).ToList();
+        _searchAddressBook = searchAddressBook;
         BuildUI();
         PopulateTower();
     }
@@ -28,27 +38,23 @@ public class ManageTeamsForm : Form
     private void BuildUI()
     {
         Text = "Manage Team Towers";
-        Size = new Size(700, 480);
-        MinimumSize = new Size(600, 400);
+        Size = new Size(720, 530);
+        MinimumSize = new Size(620, 460);
         StartPosition = FormStartPosition.CenterParent;
         Font = new Font("Segoe UI", 10f);
 
-        // Tower selector row
-        var towerLabel = new Label
-        {
-            Text = "Tower:",
-            AutoSize = true,
-            Location = new Point(12, 16),
-        };
+        _debounce = new System.Windows.Forms.Timer { Interval = 350 };
+        _debounce.Tick += (_, _) => { _debounce.Stop(); RunSearch(); };
 
+        // Tower selector
+        var towerLabel = new Label { Text = "Tower:", AutoSize = true, Location = new Point(12, 16) };
         _towerCombo = new ComboBox
         {
             DropDownStyle = ComboBoxStyle.DropDownList,
             Location = new Point(65, 12),
             Width = 180,
         };
-        foreach (var t in TeamConfig.TowerNames)
-            _towerCombo.Items.Add(t);
+        foreach (var t in TeamConfig.TowerNames) _towerCombo.Items.Add(t);
         _towerCombo.SelectedIndex = 0;
         _towerCombo.SelectedIndexChanged += (_, _) => PopulateTower();
 
@@ -60,11 +66,10 @@ public class ManageTeamsForm : Form
             Location = new Point(12, 52),
             Font = new Font("Segoe UI", 9f, FontStyle.Bold),
         };
-
         _membersBox = new ListBox
         {
             Location = new Point(12, 72),
-            Size = new Size(260, 320),
+            Size = new Size(260, 360),
             SelectionMode = SelectionMode.MultiExtended,
             Sorted = true,
         };
@@ -74,8 +79,8 @@ public class ManageTeamsForm : Form
         _addBtn = new Button
         {
             Text = "◀ Add",
-            Location = new Point(285, 160),
-            Size = new Size(90, 34),
+            Location = new Point(285, 195),
+            Size = new Size(95, 34),
             BackColor = Color.FromArgb(16, 137, 62),
             ForeColor = Color.White,
             FlatStyle = FlatStyle.Flat,
@@ -85,8 +90,8 @@ public class ManageTeamsForm : Form
         _removeBtn = new Button
         {
             Text = "Remove ▶",
-            Location = new Point(285, 204),
-            Size = new Size(90, 34),
+            Location = new Point(285, 239),
+            Size = new Size(95, 34),
             BackColor = Color.FromArgb(180, 60, 30),
             ForeColor = Color.White,
             FlatStyle = FlatStyle.Flat,
@@ -96,16 +101,33 @@ public class ManageTeamsForm : Form
         // Outlook users panel (right)
         var usersLabel = new Label
         {
-            Text = "Outlook Users",
+            Text = "Outlook / GAL Users",
             AutoSize = true,
-            Location = new Point(390, 52),
+            Location = new Point(395, 52),
             Font = new Font("Segoe UI", 9f, FontStyle.Bold),
+        };
+
+        _searchBox = new TextBox
+        {
+            Location = new Point(395, 72),
+            Size = new Size(285, 24),
+            PlaceholderText = "Search contacts / GAL…",
+        };
+        _searchBox.TextChanged += (_, _) => { _debounce.Stop(); _debounce.Start(); };
+
+        _searchStatus = new Label
+        {
+            Location = new Point(395, 100),
+            Size = new Size(285, 18),
+            Font = new Font("Segoe UI", 8f, FontStyle.Italic),
+            ForeColor = Color.Gray,
+            Text = "",
         };
 
         _usersBox = new ListBox
         {
-            Location = new Point(390, 72),
-            Size = new Size(280, 320),
+            Location = new Point(395, 120),
+            Size = new Size(285, 312),
             SelectionMode = SelectionMode.MultiExtended,
             Sorted = true,
         };
@@ -115,8 +137,7 @@ public class ManageTeamsForm : Form
         var saveBtn = new Button
         {
             Text = "Save",
-            DialogResult = DialogResult.None,
-            Location = new Point(490, 410),
+            Location = new Point(510, 460),
             Size = new Size(85, 30),
             BackColor = Color.FromArgb(0, 84, 166),
             ForeColor = Color.White,
@@ -133,7 +154,7 @@ public class ManageTeamsForm : Form
         {
             Text = "Close",
             DialogResult = DialogResult.OK,
-            Location = new Point(585, 410),
+            Location = new Point(605, 460),
             Size = new Size(85, 30),
             BackColor = Color.FromArgb(100, 100, 100),
             ForeColor = Color.White,
@@ -145,11 +166,9 @@ public class ManageTeamsForm : Form
             towerLabel, _towerCombo,
             membersLabel, _membersBox,
             _addBtn, _removeBtn,
-            usersLabel, _usersBox,
+            usersLabel, _searchBox, _searchStatus, _usersBox,
             saveBtn, closeBtn,
         });
-
-        AcceptButton = saveBtn;
     }
 
     private void PopulateTower()
@@ -163,24 +182,84 @@ public class ManageTeamsForm : Form
                 _membersBox.Items.Add(m);
         _membersBox.EndUpdate();
 
+        // If search box is empty show email senders; otherwise re-run search
+        if (string.IsNullOrWhiteSpace(_searchBox?.Text))
+            PopulateUsersFromEmailSenders();
+        else
+            RunSearch();
+
+        UpdateButtons();
+    }
+
+    private void PopulateUsersFromEmailSenders()
+    {
+        string tower = _towerCombo.SelectedItem as string ?? "";
+        var memberSet = GetCurrentMemberSet();
+
         _usersBox.BeginUpdate();
         _usersBox.Items.Clear();
-        var memberSet = new HashSet<string>(
-            members ?? Enumerable.Empty<string>(),
-            StringComparer.OrdinalIgnoreCase);
-
-        foreach (var user in _outlookUsers)
+        foreach (var user in _emailSenders)
         {
             if (memberSet.Contains(user)) continue;
             string otherTower = _config.GetTeam(user);
             string display = otherTower == "Other" || otherTower == tower
-                ? user
-                : $"{user}  ({otherTower})";
+                ? user : $"{user}  ({otherTower})";
             _usersBox.Items.Add(display);
         }
         _usersBox.EndUpdate();
+        _searchStatus.Text = $"{_usersBox.Items.Count} recent senders";
+    }
 
-        UpdateButtons();
+    private void RunSearch()
+    {
+        string query = _searchBox.Text.Trim();
+        if (query.Length < 2)
+        {
+            PopulateUsersFromEmailSenders();
+            return;
+        }
+
+        _searchCts?.Cancel();
+        _searchCts = new CancellationTokenSource();
+        var token = _searchCts.Token;
+
+        _searchStatus.Text = "Searching…";
+        _usersBox.Items.Clear();
+
+        Task.Run(() => _searchAddressBook(query), token).ContinueWith(t =>
+        {
+            if (token.IsCancellationRequested || t.IsFaulted) return;
+            var results = t.Result;
+            Invoke(() =>
+            {
+                if (token.IsCancellationRequested) return;
+                string tower = _towerCombo.SelectedItem as string ?? "";
+                var memberSet = GetCurrentMemberSet();
+
+                _usersBox.BeginUpdate();
+                _usersBox.Items.Clear();
+                foreach (var user in results)
+                {
+                    if (memberSet.Contains(user)) continue;
+                    string otherTower = _config.GetTeam(user);
+                    string display = otherTower == "Other" || otherTower == tower
+                        ? user : $"{user}  ({otherTower})";
+                    _usersBox.Items.Add(display);
+                }
+                _usersBox.EndUpdate();
+                _searchStatus.Text = _usersBox.Items.Count == 0
+                    ? "No results" : $"{_usersBox.Items.Count} result(s)";
+                UpdateButtons();
+            });
+        }, TaskScheduler.Default);
+    }
+
+    private HashSet<string> GetCurrentMemberSet()
+    {
+        string tower = _towerCombo.SelectedItem as string ?? "";
+        _config.Teams.TryGetValue(tower, out var members);
+        return new HashSet<string>(members ?? Enumerable.Empty<string>(),
+            StringComparer.OrdinalIgnoreCase);
     }
 
     private void AddBtn_Click(object? sender, EventArgs e)
@@ -189,7 +268,6 @@ public class ManageTeamsForm : Form
         var selected = _usersBox.SelectedItems.Cast<string>().ToList();
         foreach (var item in selected)
         {
-            // Strip the "(Tower)" suffix if present
             string name = item.Contains("  (") ? item[..item.IndexOf("  (")] : item;
             _config.AddMember(tower, name);
         }
@@ -209,5 +287,12 @@ public class ManageTeamsForm : Form
     {
         _addBtn.Enabled = _usersBox.SelectedItems.Count > 0;
         _removeBtn.Enabled = _membersBox.SelectedItems.Count > 0;
+    }
+
+    protected override void OnFormClosed(FormClosedEventArgs e)
+    {
+        _searchCts?.Cancel();
+        _debounce.Dispose();
+        base.OnFormClosed(e);
     }
 }
