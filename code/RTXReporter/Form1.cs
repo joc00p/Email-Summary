@@ -82,13 +82,17 @@ public class MainForm : Form
         MainMenuStrip = menuStrip;
 
         // File menu
-        _copyMenuItem  = new ToolStripMenuItem("Copy")        { Enabled = false, ShortcutKeys = Keys.Control | Keys.C };
-        _saveMenuItem  = new ToolStripMenuItem("Save As...")   { Enabled = false, ShortcutKeys = Keys.Control | Keys.S };
+        _copyMenuItem  = new ToolStripMenuItem("Copy")        { Enabled = false };
+        _saveMenuItem  = new ToolStripMenuItem("Save As...")   { Enabled = false };
         _pptxMenuItem  = new ToolStripMenuItem("Export PPTX")  { Enabled = false };
         var reloadItem = new ToolStripMenuItem("Reload")       { ShortcutKeys = Keys.F5 };
         var settingsItem = new ToolStripMenuItem("Settings");
 
-        _copyMenuItem.Click   += (_, _) => Clipboard.SetText(_reportBox.Text);
+        _copyMenuItem.Click   += (_, _) =>
+        {
+            var text = _reportBox.SelectionLength > 0 ? _reportBox.SelectedText : _reportBox.Text;
+            if (!string.IsNullOrEmpty(text)) Clipboard.SetText(text);
+        };
         _saveMenuItem.Click   += SaveReport_Click;
         _pptxMenuItem.Click   += ExportPptx_Click;
         reloadItem.Click      += LoadEmails_Click;
