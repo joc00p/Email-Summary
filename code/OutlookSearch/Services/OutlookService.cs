@@ -39,6 +39,11 @@ public class OutlookService : IDisposable
     private const int olFolderInbox = 6;
     private const int MaxResultsDefault = 2000;
 
+    // MAPI property tags for the sender's real SMTP address. SenderEmailAddress is an
+    // X.500 DN (not SMTP) for internal Exchange senders, so we read these instead.
+    private const string PrSenderSmtp  = "http://schemas.microsoft.com/mapi/proptag/0x5D01001F";
+    private const string PrSentRepSmtp = "http://schemas.microsoft.com/mapi/proptag/0x5D02001F";
+
     private readonly StaTaskScheduler _sta = new();
     private dynamic? _app;
     private dynamic? _ns;
@@ -175,9 +180,11 @@ public class OutlookService : IDisposable
                 // Restrict narrows the set store-side for speed; fall back to the full
                 // collection if the DASL query is rejected. Match() below is authoritative.
                 candidates = items;
+                bool restrictApplied = false;
                 if (!string.IsNullOrEmpty(dasl))
                 {
-                    try { candidates = items.Restrict(dasl); } catch { candidates = items; }
+                    try { candidates = items.Restrict(dasl); restrictApplied = true; }
+                    catch { candidates = items; restrictApplied = false; }
                 }
                 try { candidates.Sort("[ReceivedTime]", true); } catch { /* order enforced again below */ }
 
@@ -199,7 +206,7 @@ public class OutlookService : IDisposable
                         try { cls = item.MessageClass; } catch { }
                         if (!cls.StartsWith("IPM.Note")) continue;   // mail items only
 
-                        if (!Match(item, opts)) continue;
+                        if (!Match(item, opts, restrictApplied)) continue;
                         results.Add(MapItem(item, storeId, folderName));
                     }
                     catch { /* skip any item that won't map cleanly */ }
@@ -245,7 +252,9 @@ public class OutlookService : IDisposable
     });
 
     // In-memory predicate — the source of truth for whether an item matches.
-    private static bool Match(dynamic item, SearchOptions o)
+    // When <paramref name="restrictApplied"/> is true the store-side DASL filter already
+    // matched keyword against subject+body, so we skip the expensive full-body re-read.
+    private static bool Match(dynamic item, SearchOptions o, bool restrictApplied)
     {
         try
         {
@@ -264,14 +273,16 @@ public class OutlookService : IDisposable
             if (!string.IsNullOrEmpty(o.From))
             {
                 string sn = SafeStr(() => item.SenderName);
-                string se = SafeStr(() => item.SenderEmailAddress);
+                string smtp = GetSenderSmtp(item);
                 if (sn.IndexOf(o.From, StringComparison.OrdinalIgnoreCase) < 0 &&
-                    se.IndexOf(o.From, StringComparison.OrdinalIgnoreCase) < 0)
+                    smtp.IndexOf(o.From, StringComparison.OrdinalIgnoreCase) < 0)
                     return false;
             }
 
-            if (!string.IsNullOrEmpty(o.Keyword))
+            if (!string.IsNullOrEmpty(o.Keyword) && !restrictApplied)
             {
+                // Only reached on the fallback path (Restrict was rejected) — reading the
+                // body here is unavoidable to honor the keyword.
                 string subj = SafeStr(() => item.Subject);
                 string body = SafeStr(() => item.Body);
                 if (subj.IndexOf(o.Keyword, StringComparison.OrdinalIgnoreCase) < 0 &&
@@ -284,16 +295,39 @@ public class OutlookService : IDisposable
         catch { return false; }
     }
 
+    // Returns the sender's real SMTP address (works for both Exchange and internet senders).
+    private static string GetSenderSmtp(dynamic item)
+    {
+        foreach (var tag in new[] { PrSenderSmtp, PrSentRepSmtp })
+        {
+            try
+            {
+                string v = item.PropertyAccessor.GetProperty(tag) as string ?? "";
+                if (v.Contains('@')) return v;
+            }
+            catch { }
+        }
+        // Fallback: SenderEmailAddress is a real SMTP address only for non-Exchange senders.
+        try
+        {
+            if (!string.Equals(SafeStr(() => item.SenderEmailType), "EX", StringComparison.OrdinalIgnoreCase))
+            {
+                string addr = SafeStr(() => item.SenderEmailAddress);
+                if (addr.Contains('@')) return addr;
+            }
+        }
+        catch { }
+        return "";
+    }
+
     private static EmailResult MapItem(dynamic item, string storeId, string folderName)
     {
-        string from = SafeStr(() => item.SenderName);
-        string fromEmail = SafeStr(() => item.SenderEmailAddress);
-        if (!string.IsNullOrEmpty(fromEmail) && !string.Equals(from, fromEmail, StringComparison.OrdinalIgnoreCase))
-            from = string.IsNullOrEmpty(from) ? fromEmail : $"{from} <{fromEmail}>";
-
-        string preview = SafeStr(() => item.Body);
-        if (preview.Length > 200) preview = preview[..200];
-        preview = preview.Replace("\r", " ").Replace("\n", " ").Trim();
+        string name = SafeStr(() => item.SenderName);
+        string smtp = GetSenderSmtp(item);
+        string from =
+            name.Length > 0 && smtp.Length > 0 && !string.Equals(name, smtp, StringComparison.OrdinalIgnoreCase)
+                ? $"{name} <{smtp}>"
+                : name.Length > 0 ? name : smtp;
 
         bool hasAtt = false;
         try { hasAtt = item.Attachments.Count > 0; } catch { }
@@ -301,6 +335,8 @@ public class OutlookService : IDisposable
         string sid = storeId;
         if (string.IsNullOrEmpty(sid)) sid = SafeStr(() => item.Parent.StoreID);
 
+        // Note: we deliberately do NOT read item.Body here — that forces the full
+        // message to load (~ms each) and the preview pane fetches the body on demand.
         return new EmailResult
         {
             EntryId = SafeStr(() => item.EntryID),
@@ -310,7 +346,7 @@ public class OutlookService : IDisposable
             To = SafeStr(() => item.To),
             ReceivedAt = TryGetDate(item),
             FolderName = folderName,
-            BodyPreview = preview,
+            BodyPreview = "",
             HasAttachments = hasAtt
         };
     }
@@ -353,8 +389,13 @@ public class OutlookService : IDisposable
             clauses.Add($"\"urn:schemas:httpmail:subject\" LIKE '%{Esc(o.Subject)}%'");
 
         if (!string.IsNullOrWhiteSpace(o.From))
-            clauses.Add($"(\"urn:schemas:httpmail:fromname\" LIKE '%{Esc(o.From)}%' " +
-                        $"OR \"urn:schemas:httpmail:fromemail\" LIKE '%{Esc(o.From)}%')");
+        {
+            // An "@" means the user picked/typed an address — match the real SMTP property
+            // (fast, indexed, and correct for Exchange senders). Otherwise match display name.
+            clauses.Add(o.From.Contains('@')
+                ? $"\"{PrSenderSmtp}\" LIKE '%{Esc(o.From)}%'"
+                : $"\"urn:schemas:httpmail:fromname\" LIKE '%{Esc(o.From)}%'");
+        }
 
         if (o.DateFrom.HasValue)
             clauses.Add($"\"urn:schemas:httpmail:datereceived\" >= '{o.DateFrom.Value:yyyy-MM-dd} 00:00'");
