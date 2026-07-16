@@ -1,6 +1,9 @@
+using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
+
 namespace OutlookSearch.Services;
 
-public record MailFolderNode(string EntryId, string StoreId, string Name, int ItemCount, List<MailFolderNode> Children);
+public record MailFolderNode(string EntryId, string StoreId, string Name, List<MailFolderNode> Children);
 
 public record SearchOptions(
     string? Keyword,
@@ -8,6 +11,9 @@ public record SearchOptions(
     string? From,
     DateTime? DateFrom,
     DateTime? DateTo);
+
+/// <summary>Result of a search, including whether it was cut short so the UI can be honest about it.</summary>
+public record SearchOutcome(List<EmailResult> Items, bool Truncated, int FoldersSearched, int FoldersFailed);
 
 public class EmailResult
 {
@@ -31,11 +37,14 @@ public class OutlookService : IDisposable
 {
     // Outlook enum constants (avoids needing the interop assembly).
     private const int olFolderInbox = 6;
-    private const int MaxResultsDefault = 1000;
+    private const int MaxResultsDefault = 2000;
 
     private readonly StaTaskScheduler _sta = new();
     private dynamic? _app;
     private dynamic? _ns;
+
+    /// <summary>The result cap applied per search; when hit, the outcome is flagged as truncated.</summary>
+    public int MaxResults { get; } = MaxResultsDefault;
 
     private void EnsureApp()
     {
@@ -52,19 +61,27 @@ public class OutlookService : IDisposable
     {
         EnsureApp();
         var roots = new List<MailFolderNode>();
-        dynamic stores = _ns!.Stores;
-        int count = stores.Count;
-        for (int i = 1; i <= count; i++)
+        dynamic? stores = null;
+        try
         {
-            try
+            stores = _ns!.Stores;
+            int count = stores.Count;
+            for (int i = 1; i <= count; i++)
             {
-                dynamic store = stores.Item(i);
-                string storeId = store.StoreID;
-                dynamic root = store.GetRootFolder();
-                roots.Add(BuildNode(root, storeId));
+                dynamic? store = null;
+                dynamic? root = null;
+                try
+                {
+                    store = stores.Item(i);
+                    string storeId = store.StoreID;
+                    root = store.GetRootFolder();
+                    roots.Add(BuildNode(root, storeId));
+                }
+                catch { /* skip stores we cannot open */ }
+                finally { Rel(root); Rel(store); }
             }
-            catch { /* skip stores we cannot open */ }
         }
+        finally { Rel(stores); }
         return roots;
     });
 
@@ -75,47 +92,61 @@ public class OutlookService : IDisposable
     public Task<MailFolderNode?> OpenSharedMailboxAsync(string nameOrEmail) => _sta.Run<MailFolderNode?>(() =>
     {
         EnsureApp();
-        dynamic recipient = _ns!.CreateRecipient(nameOrEmail);
-        recipient.Resolve();
-        if (!(bool)recipient.Resolved)
-            throw new InvalidOperationException($"Could not resolve '{nameOrEmail}' in the address book.");
+        dynamic? recipient = null;
+        dynamic? inbox = null;
+        dynamic? root = null;
+        try
+        {
+            recipient = _ns!.CreateRecipient(nameOrEmail);
+            recipient.Resolve();
+            if (!(bool)recipient.Resolved)
+                throw new InvalidOperationException($"Could not resolve '{nameOrEmail}' in the address book.");
 
-        // GetSharedDefaultFolder gives us their Inbox; its parent is the mailbox root,
-        // from which we can enumerate the whole (accessible) folder tree.
-        dynamic inbox = _ns.GetSharedDefaultFolder(recipient, olFolderInbox);
-        dynamic root;
-        try { root = inbox.Parent; }
-        catch { root = inbox; }
+            // GetSharedDefaultFolder gives us their Inbox; its parent is the mailbox root,
+            // from which we can enumerate the whole (accessible) folder tree.
+            inbox = _ns.GetSharedDefaultFolder(recipient, olFolderInbox);
+            try { root = inbox.Parent; }
+            catch { root = inbox; }
 
-        string storeId = "";
-        try { storeId = root.StoreID; } catch { }
-        return BuildNode(root, storeId);
+            string storeId = "";
+            try { storeId = root.StoreID; } catch { }
+            return BuildNode(root, storeId);
+        }
+        finally
+        {
+            if (!ReferenceEquals(root, inbox)) Rel(root);
+            Rel(inbox);
+            Rel(recipient);
+        }
     });
 
     private static MailFolderNode BuildNode(dynamic folder, string storeId)
     {
         var children = new List<MailFolderNode>();
+        dynamic? subs = null;
         try
         {
-            dynamic subs = folder.Folders;
+            subs = folder.Folders;
             int c = subs.Count;
             for (int i = 1; i <= c; i++)
             {
-                try { children.Add(BuildNode(subs.Item(i), storeId)); }
+                dynamic? child = null;
+                try { child = subs.Item(i); children.Add(BuildNode(child, storeId)); }
                 catch { /* skip folders we lack permission to enumerate */ }
+                finally { Rel(child); }
             }
         }
         catch { }
+        finally { Rel(subs); }
 
-        int items = 0;   try { items = folder.Items.Count; } catch { }
         string name = "Folder"; try { name = folder.Name; } catch { }
         string eid = "";  try { eid = folder.EntryID; } catch { }
         string sid = storeId; try { if (string.IsNullOrEmpty(sid)) sid = folder.StoreID; } catch { }
 
-        return new MailFolderNode(eid, sid, name, items, children);
+        return new MailFolderNode(eid, sid, name, children);
     }
 
-    public Task<List<EmailResult>> SearchAsync(
+    public Task<SearchOutcome> SearchAsync(
         IReadOnlyList<(string EntryId, string StoreId, string Name)> folders,
         SearchOptions opts,
         CancellationToken ct) => _sta.Run(() =>
@@ -123,72 +154,94 @@ public class OutlookService : IDisposable
         EnsureApp();
         var dasl = BuildDasl(opts);
         var results = new List<EmailResult>();
+        bool truncated = false;
+        int foldersSearched = 0, foldersFailed = 0;
 
         foreach (var (entryId, storeId, folderName) in folders)
         {
             if (ct.IsCancellationRequested) break;
             if (string.IsNullOrEmpty(entryId)) continue;
 
-            dynamic folder;
-            try { folder = string.IsNullOrEmpty(storeId) ? _ns!.GetFolderFromID(entryId) : _ns!.GetFolderFromID(entryId, storeId); }
-            catch { continue; }
-
-            dynamic items;
-            try { items = folder.Items; } catch { continue; }
-
-            // Restrict narrows the set store-side for speed; fall back to the full
-            // collection if the DASL query is rejected. Match() below is authoritative.
-            dynamic candidates = items;
-            if (!string.IsNullOrEmpty(dasl))
+            dynamic? folder = null;
+            dynamic? items = null;
+            dynamic? candidates = null;
+            try
             {
-                try { candidates = items.Restrict(dasl); } catch { candidates = items; }
-            }
-            try { candidates.Sort("[ReceivedTime]", true); } catch { }
+                try { folder = string.IsNullOrEmpty(storeId) ? _ns!.GetFolderFromID(entryId) : _ns!.GetFolderFromID(entryId, storeId); }
+                catch { foldersFailed++; continue; }
 
-            int n = 0;
-            try { n = candidates.Count; } catch { continue; }
+                try { items = folder.Items; } catch { foldersFailed++; continue; }
 
-            for (int i = 1; i <= n; i++)
-            {
-                if (ct.IsCancellationRequested) break;
-                if (results.Count >= MaxResultsDefault) break;
-
-                dynamic item;
-                try { item = candidates.Item(i); } catch { continue; }
-
-                try
+                // Restrict narrows the set store-side for speed; fall back to the full
+                // collection if the DASL query is rejected. Match() below is authoritative.
+                candidates = items;
+                if (!string.IsNullOrEmpty(dasl))
                 {
-                    string cls = "";
-                    try { cls = item.MessageClass; } catch { }
-                    if (!cls.StartsWith("IPM.Note")) continue;   // mail items only
-
-                    if (!Match(item, opts)) continue;
-                    results.Add(MapItem(item, storeId, folderName));
+                    try { candidates = items.Restrict(dasl); } catch { candidates = items; }
                 }
-                catch { /* skip any item that won't map cleanly */ }
+                try { candidates.Sort("[ReceivedTime]", true); } catch { /* order enforced again below */ }
+
+                int n;
+                try { n = candidates.Count; } catch { foldersFailed++; continue; }
+                foldersSearched++;
+
+                for (int i = 1; i <= n; i++)
+                {
+                    if (ct.IsCancellationRequested) break;
+                    if (results.Count >= MaxResults) { truncated = true; break; }
+
+                    dynamic? item = null;
+                    try
+                    {
+                        try { item = candidates.Item(i); } catch { continue; }
+
+                        string cls = "";
+                        try { cls = item.MessageClass; } catch { }
+                        if (!cls.StartsWith("IPM.Note")) continue;   // mail items only
+
+                        if (!Match(item, opts)) continue;
+                        results.Add(MapItem(item, storeId, folderName));
+                    }
+                    catch { /* skip any item that won't map cleanly */ }
+                    finally { Rel(item); }
+                }
+            }
+            finally
+            {
+                if (!ReferenceEquals(candidates, items)) Rel(candidates);
+                Rel(items);
+                Rel(folder);
             }
 
-            if (results.Count >= MaxResultsDefault) break;
+            if (truncated) break;   // global cap reached; remaining folders not searched
         }
 
-        return results
+        // Final ordering is authoritative even if a folder's COM Sort failed.
+        var ordered = results
             .OrderByDescending(r => r.ReceivedAt ?? DateTime.MinValue)
             .ToList();
+        return new SearchOutcome(ordered, truncated, foldersSearched, foldersFailed);
     });
 
     public Task<string> GetBodyAsync(string entryId, string storeId) => _sta.Run(() =>
     {
         EnsureApp();
-        dynamic item = string.IsNullOrEmpty(storeId)
-            ? _ns!.GetItemFromID(entryId)
-            : _ns!.GetItemFromID(entryId, storeId);
+        dynamic? item = null;
         try
         {
-            string body = item.Body;
+            item = string.IsNullOrEmpty(storeId)
+                ? _ns!.GetItemFromID(entryId)
+                : _ns!.GetItemFromID(entryId, storeId);
+
+            string body = SafeStr(() => item!.Body);
             if (!string.IsNullOrWhiteSpace(body)) return body;
+
+            // Plain body empty (e.g. HTML-only mail) — fall back to the HTML, stripped.
+            string html = SafeStr(() => item!.HTMLBody);
+            return StripHtml(html);
         }
-        catch { }
-        return "";
+        catch { return ""; }
+        finally { Rel(item); }
     });
 
     // In-memory predicate — the source of truth for whether an item matches.
@@ -273,6 +326,22 @@ public class OutlookService : IDisposable
     {
         try { return (string)(get() ?? "") ?? ""; }
         catch { return ""; }
+    }
+
+    private static string StripHtml(string html)
+    {
+        if (string.IsNullOrEmpty(html)) return "";
+        var text = Regex.Replace(html, "<(script|style)[^>]*>.*?</\\1>", " ", RegexOptions.Singleline | RegexOptions.IgnoreCase);
+        text = Regex.Replace(text, "<[^>]+>", "");
+        text = System.Net.WebUtility.HtmlDecode(text);
+        return Regex.Replace(text, @"[ \t]{2,}", " ").Trim();
+    }
+
+    // Releases a COM RCW; safe to call with null or non-COM values.
+    private static void Rel(object? o)
+    {
+        try { if (o != null && Marshal.IsComObject(o)) Marshal.ReleaseComObject(o); }
+        catch { }
     }
 
     // Builds an Outlook DASL (@SQL) filter to pre-narrow results store-side.

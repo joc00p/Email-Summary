@@ -10,6 +10,7 @@ public class MainForm : Form
     private OutlookService? _svc;
     private readonly List<EmailResult> _results = [];
     private CancellationTokenSource _cts = new();
+    private int _previewSeq;   // guards against a stale body overwriting a newer selection
 
     // ── Left: mailboxes & folders ─────────────────────────────────
     private readonly Button _refreshBtn = new() { Text = "Refresh", Width = 70 };
@@ -39,6 +40,7 @@ public class MainForm : Form
         Width = 125
     };
     private readonly Button _searchBtn = new() { Text = "Search Mail", Width = 100, Enabled = false };
+    private readonly Button _cancelBtn = new() { Text = "Cancel", Width = 70, Enabled = false };
     private readonly Label _countLabel = new() { AutoSize = true, Text = "0 results", ForeColor = Color.Gray };
 
     // ── Right: results + preview ──────────────────────────────────
@@ -92,12 +94,15 @@ public class MainForm : Form
 
         var mainSplit = new SplitContainer
         {
+            // Explicit size first so the min-size/splitter constraints are
+            // satisfiable before Dock=Fill resizes us to the parent.
+            Size = new Size(1000, 650),
             Dock = DockStyle.Fill,
             Orientation = Orientation.Vertical,
-            SplitterDistance = 300,
             FixedPanel = FixedPanel.Panel1,
             Panel1MinSize = 240,
-            Panel2MinSize = 450
+            Panel2MinSize = 450,
+            SplitterDistance = 300
         };
 
         BuildLeftPanel(mainSplit.Panel1);
@@ -195,7 +200,7 @@ public class MainForm : Form
             Padding = new Padding(0, 4, 0, 0)
         };
         _countLabel.Padding = new Padding(8, 5, 0, 0);
-        btnPanel.Controls.AddRange([_searchBtn, _countLabel]);
+        btnPanel.Controls.AddRange([_searchBtn, _cancelBtn, _countLabel]);
         tbl.Controls.Add(btnPanel, 0, 2);
         tbl.SetColumnSpan(btnPanel, 4);
 
@@ -203,11 +208,12 @@ public class MainForm : Form
 
         var resultsSplit = new SplitContainer
         {
+            Size = new Size(600, 600),
             Dock = DockStyle.Fill,
             Orientation = Orientation.Horizontal,
-            SplitterDistance = 320,
             Panel1MinSize = 80,
-            Panel2MinSize = 60
+            Panel2MinSize = 60,
+            SplitterDistance = 320
         };
         resultsSplit.Panel1.Controls.Add(_resultList);
         resultsSplit.Panel2.Controls.Add(_bodyPreview);
@@ -236,6 +242,7 @@ public class MainForm : Form
         _checkAllBtn.Click += (_, _) => SetAllChecked(_folderTree.Nodes, true);
         _uncheckAllBtn.Click += (_, _) => SetAllChecked(_folderTree.Nodes, false);
         _searchBtn.Click += OnSearch;
+        _cancelBtn.Click += (_, _) => { _cts.Cancel(); SetStatus("Cancelling…"); };
         _resultList.SelectedIndexChanged += OnResultSelected;
 
         _folderTree.AfterCheck += (_, e) =>
@@ -318,8 +325,7 @@ public class MainForm : Form
 
     private static TreeNode BuildTreeNode(MailFolderNode folder)
     {
-        var label = folder.ItemCount > 0 ? $"{folder.Name}  ({folder.ItemCount})" : folder.Name;
-        var node = new TreeNode(label) { Tag = folder };
+        var node = new TreeNode(folder.Name) { Tag = folder };
         foreach (var child in folder.Children)
             node.Nodes.Add(BuildTreeNode(child));
         return node;
@@ -346,15 +352,16 @@ public class MainForm : Form
         );
 
         ResetCts();
-        SetBusy($"Searching {checkedFolders.Count} folder(s)…");
+        var token = _cts.Token;
+        SetBusy($"Searching {checkedFolders.Count} folder(s)…", cancelable: true);
         try
         {
             _results.Clear();
             _resultList.Items.Clear();
             _bodyPreview.Clear();
 
-            var emails = await _svc.SearchAsync(checkedFolders, opts, _cts.Token);
-            _results.AddRange(emails);
+            var outcome = await _svc.SearchAsync(checkedFolders, opts, token);
+            _results.AddRange(outcome.Items);
 
             _resultList.BeginUpdate();
             foreach (var r in _results)
@@ -371,9 +378,17 @@ public class MainForm : Form
             }
             _resultList.EndUpdate();
 
-            _countLabel.Text = $"{_results.Count} result(s)";
+            _countLabel.Text = outcome.Truncated ? $"{_results.Count}+ results" : $"{_results.Count} result(s)";
             _countLabel.ForeColor = _results.Count > 0 ? Color.DarkGreen : Color.Gray;
-            SetStatus($"Found {_results.Count} email(s) across {checkedFolders.Count} folder(s).");
+
+            var msg = token.IsCancellationRequested
+                ? $"Cancelled — {_results.Count} email(s) found so far in {outcome.FoldersSearched} folder(s)."
+                : $"Found {_results.Count} email(s) in {outcome.FoldersSearched} folder(s).";
+            if (outcome.FoldersFailed > 0)
+                msg += $" {outcome.FoldersFailed} folder(s) skipped (no access).";
+            if (outcome.Truncated)
+                msg += $" Result limit ({_svc.MaxResults}) reached — narrow your search (add a date range or keyword) to see the rest.";
+            SetStatus(msg);
         }
         catch (OperationCanceledException) { SetStatus("Search cancelled."); }
         catch (Exception ex) { SetStatus($"Search error: {ex.Message}"); }
@@ -384,6 +399,7 @@ public class MainForm : Form
     {
         if (_resultList.SelectedItems.Count == 0 || _svc is null) return;
         var result = (EmailResult)_resultList.SelectedItems[0].Tag!;
+        var seq = ++_previewSeq;   // this becomes the newest request
 
         _bodyPreview.Clear();
         _bodyPreview.SelectionFont = new Font("Segoe UI", 9, FontStyle.Bold);
@@ -397,17 +413,23 @@ public class MainForm : Form
         _bodyPreview.AppendText(new string('-', 90) + "\n");
         _bodyPreview.SelectionColor = _bodyPreview.ForeColor;
 
+        string body;
         try
         {
-            var body = await _svc.GetBodyAsync(result.EntryId, result.StoreId);
+            body = await _svc.GetBodyAsync(result.EntryId, result.StoreId);
             if (string.IsNullOrWhiteSpace(body)) body = result.BodyPreview;
             body = Regex.Replace(body, @"\n{3,}", "\n\n").Trim();
-            _bodyPreview.AppendText(body);
         }
         catch
         {
-            _bodyPreview.AppendText(result.BodyPreview);
+            body = result.BodyPreview;
         }
+
+        // A newer selection came in while we were fetching — discard this stale body
+        // so it can't land under the wrong headers.
+        if (seq != _previewSeq) return;
+
+        _bodyPreview.AppendText(body);
         _bodyPreview.SelectionStart = 0;
         _bodyPreview.ScrollToCaret();
     }
@@ -473,7 +495,7 @@ public class MainForm : Form
         _cts = new CancellationTokenSource();
     }
 
-    private void SetBusy(string msg)
+    private void SetBusy(string msg, bool cancelable = false)
     {
         _statusLabel.Text = msg;
         _progressBar.Visible = true;
@@ -481,11 +503,13 @@ public class MainForm : Form
         _refreshBtn.Enabled = false;
         _openMailboxBtn.Enabled = false;
         _searchBtn.Enabled = false;
+        _cancelBtn.Enabled = cancelable;
     }
 
     private void SetIdle()
     {
         _progressBar.Visible = false;
+        _cancelBtn.Enabled = false;
         _refreshBtn.Enabled = _svc is not null;
         _openMailboxBtn.Enabled = _svc is not null;
         _searchBtn.Enabled = _folderTree.Nodes.Count > 0;
