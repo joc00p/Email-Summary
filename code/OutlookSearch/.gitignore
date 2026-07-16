@@ -1,6 +1,0 @@
-bin/
-obj/
-
-# Launch-test capture artifacts
-err.txt
-out.txt
