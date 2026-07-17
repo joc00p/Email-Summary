@@ -123,12 +123,15 @@ public class MainForm : Form
         {
             _generateMenuItem,
             _pptxMenuItem,
-            new ToolStripSeparator(),
-            teamsItem,
         });
+
+        // Tools menu
+        var toolsMenu = new ToolStripMenuItem("Tools");
+        toolsMenu.DropDownItems.Add(teamsItem);
 
         menuStrip.Items.Add(fileMenu);
         menuStrip.Items.Add(reportMenu);
+        menuStrip.Items.Add(toolsMenu);
 
         // Toolbar — theme toggle only
         _toolbar = new Panel { Dock = DockStyle.Top, Height = 36 };
