@@ -109,9 +109,10 @@ public class PowerPointService
         foreach (var p in txBody.SelectNodes("a:p", nsm)!.Cast<XmlNode>().ToList())
             txBody.RemoveChild(p);
 
-        // Group parsed sections by team, preserving team order
+        // Group parsed sections by team. Only the real towers are shown — senders that
+        // don't match a tower ("Other") are never rendered under Key Accomplishments.
         var sections = ParseReportSections(reportText);
-        var teamOrder = TeamConfig.TowerNames.Append("Other").ToArray();
+        var teamOrder = TeamConfig.TowerNames;
         var byTeam = sections.GroupBy(s => GetTeam(s.Name))
                              .ToDictionary(g => g.Key, g => g.ToList());
 
