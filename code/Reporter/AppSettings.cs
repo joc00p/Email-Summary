@@ -10,21 +10,29 @@ public class AppSettings
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
                      "RTXReporter", "settings.json");
 
-    public string TemplatePath { get; set; } =
-        Path.Combine(AppContext.BaseDirectory, "RTXReport", "RTX TEMPLATE.pptx");
+    public static readonly string DefaultTemplatePath =
+        Path.Combine(AppContext.BaseDirectory, "NEWTEMPLATE.pptx");
+
+    public string TemplatePath { get; set; } = DefaultTemplatePath;
 
     public static AppSettings Load()
     {
+        var settings = new AppSettings();
         try
         {
             if (File.Exists(SettingsPath))
             {
                 var json = File.ReadAllText(SettingsPath);
-                return JsonSerializer.Deserialize<AppSettings>(json) ?? new AppSettings();
+                settings = JsonSerializer.Deserialize<AppSettings>(json) ?? new AppSettings();
             }
         }
         catch { }
-        return new AppSettings();
+
+        // Fall back to the bundled template if the saved path is blank or no longer exists.
+        if (string.IsNullOrWhiteSpace(settings.TemplatePath) || !File.Exists(settings.TemplatePath))
+            settings.TemplatePath = DefaultTemplatePath;
+
+        return settings;
     }
 
     public void Save()

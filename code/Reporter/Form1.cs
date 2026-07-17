@@ -17,6 +17,8 @@ public class MainForm : Form
 
     private Dictionary<string, List<EmailItem>> _emailsByWeek = new();
     private readonly Dictionary<string, string> _reportCache = new();
+    private readonly Dictionary<string, TowerMetrics> _metricsCache = new();
+    private TowerMetrics _lastMetrics = new();
     private string _lastWeekLabel = "";
 
     private ListBox _weekList = null!;
@@ -291,6 +293,7 @@ public class MainForm : Form
         _saveMenuItem.Enabled = false;
         _pptxMenuItem.Enabled = false;
         _reportCache.Clear();
+        _metricsCache.Clear();
 
         try
         {
@@ -331,6 +334,7 @@ public class MainForm : Form
         if (_reportCache.TryGetValue(cacheKey, out var cached))
         {
             ShowReport(cached);
+            _lastMetrics = _metricsCache.TryGetValue(cacheKey, out var cm) ? cm : new TowerMetrics();
             _copyMenuItem.Enabled = true;
             _saveMenuItem.Enabled = true;
             _pptxMenuItem.Enabled = true;
@@ -418,14 +422,18 @@ public class MainForm : Form
         {
             var report = await _ollama.SummarizeWeekAsync(weekLabel, allEmails, cts.Token);
             if (_cts != cts) return; // superseded by a newer generation — let it own the UI
+            var metrics = await _ollama.ExtractMetricsAsync(allEmails, cts.Token);
+            if (_cts != cts) return;
             string cacheKey = string.Join("|", selectedWeeks);
             _reportCache[cacheKey] = report;
+            _metricsCache[cacheKey] = metrics;
+            _lastMetrics = metrics;
             ShowReport(report);
             _lastWeekLabel = weekLabel;
             _copyMenuItem.Enabled = true;
             _saveMenuItem.Enabled = true;
             _pptxMenuItem.Enabled = true;
-            SetStatus($"Report ready — {weekLabel}.");
+            SetStatus($"Report ready — {weekLabel}. {MetricsSummary(metrics)}");
         }
         catch (OperationCanceledException)
         {
@@ -514,7 +522,7 @@ public class MainForm : Form
 
         try
         {
-            _pptx.Export(_lastWeekLabel, _reportBox.Text, dlg.FileName);
+            _pptx.Export(_lastWeekLabel, _reportBox.Text, _lastMetrics, dlg.FileName);
             SetStatus($"PPTX exported: {System.IO.Path.GetFileName(dlg.FileName)}");
         }
         catch (Exception ex)
@@ -541,6 +549,17 @@ public class MainForm : Form
         using var dlg = new SettingsForm(_appSettings);
         if (dlg.ShowDialog(this) == DialogResult.OK)
             _pptx.TemplatePath = _appSettings.TemplatePath;
+    }
+
+    private static string MetricsSummary(TowerMetrics m)
+    {
+        if (m == null || !m.AnyFound) return "No server/DB counts found in emails.";
+        var parts = new List<string>();
+        if (m.SapInstances.HasValue || m.SapRiseServers.HasValue || m.SapXetaServers.HasValue)
+            parts.Add($"SAP {m.SapInstances?.ToString() ?? "?"} inst/{m.SapRiseServers?.ToString() ?? "?"} RISE/{m.SapXetaServers?.ToString() ?? "?"} XETA");
+        if (m.SqlDatabases.HasValue) parts.Add($"SQL {m.SqlDatabases}");
+        if (m.CloudServers.HasValue) parts.Add($"Cloud {m.CloudServers}");
+        return "Counts — " + string.Join(", ", parts);
     }
 
     private void SetBusy(bool busy, string msg)

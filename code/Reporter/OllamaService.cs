@@ -151,6 +151,131 @@ public class OllamaService
         return CleanBulletSpacing(RemoveBannedPhrases(report.ToString()));
     }
 
+    /// <summary>
+    /// Pulls the server / database counts the towers report each week (SAP instances &amp;
+    /// RISE/XETA servers, SQL databases, Cloud servers) for the lower-right template table.
+    /// One focused extraction per tower keeps the local model's context tight.
+    /// </summary>
+    public async Task<TowerMetrics> ExtractMetricsAsync(List<EmailItem> emails, CancellationToken ct)
+    {
+        var metrics = new TowerMetrics();
+        var byTower = emails
+            .Where(e => !e.From.Contains("Coopersmith", StringComparison.OrdinalIgnoreCase))
+            .GroupBy(e => _teamConfig.GetTeam(e.From))
+            .ToDictionary(g => g.Key, g => g.ToList());
+
+        if (byTower.TryGetValue("SAP", out var sapEmails))
+        {
+            ct.ThrowIfCancellationRequested();
+            StatusUpdate?.Invoke("Extracting SAP server counts...");
+            var d = ParseNumbers(await CallOllama(SapMetricsPrompt(CombineBodies(sapEmails)), ct));
+            metrics.SapInstances    = Pick(d, "instances");
+            metrics.SapRiseServers  = Pick(d, "rise_servers");
+            metrics.SapRiseLiveApps = Pick(d, "rise_live_apps");
+            metrics.SapXetaServers  = Pick(d, "xeta_servers");
+            metrics.SapXetaLiveApps = Pick(d, "xeta_live_apps");
+        }
+
+        if (byTower.TryGetValue("DBA SQL", out var dbaEmails))
+        {
+            ct.ThrowIfCancellationRequested();
+            StatusUpdate?.Invoke("Extracting SQL database count...");
+            var d = ParseNumbers(await CallOllama(SqlMetricsPrompt(CombineBodies(dbaEmails)), ct));
+            metrics.SqlDatabases = Pick(d, "sql_databases");
+        }
+
+        if (byTower.TryGetValue("CLOUD", out var cloudEmails))
+        {
+            ct.ThrowIfCancellationRequested();
+            StatusUpdate?.Invoke("Extracting Cloud server count...");
+            var d = ParseNumbers(await CallOllama(CloudMetricsPrompt(CombineBodies(cloudEmails)), ct));
+            metrics.CloudServers = Pick(d, "cloud_servers");
+        }
+
+        return metrics;
+
+        static int? Pick(Dictionary<string, int?> d, string key) =>
+            d.TryGetValue(key, out var v) ? v : null;
+    }
+
+    private static string CombineBodies(List<EmailItem> emails)
+    {
+        var sb = new StringBuilder();
+        foreach (var e in emails)
+        {
+            var excerpt = e.Body.Length > 2000 ? e.Body[..2000] : e.Body;
+            sb.AppendLine($"From: {e.From}");
+            sb.AppendLine($"Subject: {e.Subject}");
+            sb.AppendLine(excerpt);
+            sb.AppendLine();
+        }
+        return sb.ToString();
+    }
+
+    private static string SapMetricsPrompt(string text) => $$"""
+        Extract exact numbers from this SAP team status update.
+        Return ONLY a JSON object, nothing else, in exactly this shape:
+        {"instances": 0, "rise_servers": 0, "rise_live_apps": 0, "xeta_servers": 0, "xeta_live_apps": 0}
+        Use null for any value that is not explicitly stated. Do not guess or calculate.
+
+        SAP update:
+        {{text}}
+        """;
+
+    private static string SqlMetricsPrompt(string text) => $$"""
+        Extract the total number of SQL databases from this DBA / SQL team update.
+        Return ONLY a JSON object, nothing else, in exactly this shape:
+        {"sql_databases": 0}
+        Use null if it is not explicitly stated. Do not guess.
+
+        DBA / SQL update:
+        {{text}}
+        """;
+
+    private static string CloudMetricsPrompt(string text) => $$"""
+        Extract the total number of Cloud servers (across Sandbox, DEV, and PROD) from this Cloud team update.
+        Return ONLY a JSON object, nothing else, in exactly this shape:
+        {"cloud_servers": 0}
+        Use null if it is not explicitly stated. Do not guess.
+
+        Cloud update:
+        {{text}}
+        """;
+
+    // Pulls integer values out of the model's JSON reply, tolerating extra prose around it.
+    private static Dictionary<string, int?> ParseNumbers(string response)
+    {
+        var result = new Dictionary<string, int?>(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(response)) return result;
+
+        int start = response.IndexOf('{');
+        int end = response.LastIndexOf('}');
+        if (start < 0 || end <= start) return result;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(response.Substring(start, end - start + 1));
+            foreach (var prop in doc.RootElement.EnumerateObject())
+            {
+                result[prop.Name] = prop.Value.ValueKind switch
+                {
+                    JsonValueKind.Number => prop.Value.TryGetInt32(out var n) ? n : null,
+                    JsonValueKind.String => TryExtractInt(prop.Value.GetString()),
+                    _ => null,
+                };
+            }
+        }
+        catch { }
+        return result;
+    }
+
+    private static int? TryExtractInt(string? s)
+    {
+        if (string.IsNullOrWhiteSpace(s)) return null;
+        var digits = new string(s.Where(char.IsDigit).ToArray());
+        return int.TryParse(digits, out var n) ? n : null;
+    }
+
     // Matches a risk *label* line: an optional bullet, a risk keyword, then a colon/dash.
     // e.g. "Risks/issues:", "- Risk: foo", "Blockers -", "Open issues:"
     private static readonly Regex RiskLabelRegex = new(

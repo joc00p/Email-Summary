@@ -24,7 +24,7 @@ public class PowerPointService
     public bool TemplateExists => File.Exists(_templatePath);
     public string TemplatePath { get => _templatePath; set => _templatePath = value; }
 
-    public void Export(string weekLabel, string reportText, string outputPath)
+    public void Export(string weekLabel, string reportText, TowerMetrics metrics, string outputPath)
     {
         File.Copy(_templatePath, outputPath, overwrite: true);
 
@@ -44,6 +44,7 @@ public class PowerPointService
         nsm.AddNamespace("p", "http://schemas.openxmlformats.org/presentationml/2006/main");
         UpdateKeyAccomplishments(doc, nsm, reportText);
         UpdateExecutiveSummary(doc, nsm, reportText);
+        UpdateManagedServicesMetrics(doc, nsm, metrics);
 
         // Serialize to MemoryStream as UTF-8 so the XML declaration is correct
         using var ms = new MemoryStream();
@@ -296,6 +297,67 @@ public class PowerPointService
             }
         }
         return sb.ToString().Trim();
+    }
+
+    // Updates the counts in the lower-right "Managed Services Tasks" table by replacing only
+    // the numbers in the existing runs, so all template formatting (bold labels, font, layout)
+    // is preserved. A null metric leaves that number as-is.
+    private static void UpdateManagedServicesMetrics(XmlDocument doc, XmlNamespaceManager nsm, TowerMetrics m)
+    {
+        if (m == null || !m.AnyFound) return;
+
+        // Locate the cell by its unique anchor text.
+        XmlNode? cell = null;
+        foreach (XmlNode t in doc.SelectNodes("//a:tc//a:t", nsm)!)
+        {
+            if (t.InnerText.Contains("SQL Databases") || t.InnerText.Contains("Servers in Sandbox"))
+            {
+                cell = t.SelectSingleNode("ancestor::a:tc", nsm);
+                break;
+            }
+        }
+        if (cell == null) return;
+
+        foreach (XmlNode t in cell.SelectNodes(".//a:t", nsm)!)
+        {
+            var s = t.InnerText;
+            // "20 instances with 104 RISE servers, 4 live apps"
+            s = ReplaceMetric(s, @"(\d+)(\s+instances with\s+)(\d+)(\s+RISE servers,\s+)(\d+)(\s+live apps)",
+                m.SapInstances, m.SapRiseServers, m.SapRiseLiveApps);
+            // "19 XETA servers, 4 live apps"
+            s = ReplaceMetric(s, @"(\d+)(\s+XETA servers,\s+)(\d+)(\s+live apps)",
+                m.SapXetaServers, m.SapXetaLiveApps);
+            // "197 SQL Databases"
+            s = ReplaceMetric(s, @"(\d+)(\s+SQL Databases)", m.SqlDatabases);
+            // "113 Servers in Sandbox, DEV, PROD"
+            s = ReplaceMetric(s, @"(\d+)(\s+Servers in Sandbox)", m.CloudServers);
+            if (s != t.InnerText) t.InnerText = s;
+        }
+    }
+
+    // Replaces the odd-numbered capture groups (the numbers) with the supplied values,
+    // keeping the even groups (the literal separators). A null value keeps the original number.
+    private static string ReplaceMetric(string input, string pattern, params int?[] values)
+    {
+        return Regex.Replace(input, pattern, match =>
+        {
+            var sb = new StringBuilder();
+            int valIdx = 0;
+            for (int g = 1; g < match.Groups.Count; g++)
+            {
+                if (g % 2 == 1) // number slot
+                {
+                    var v = valIdx < values.Length ? values[valIdx] : null;
+                    sb.Append(v?.ToString() ?? match.Groups[g].Value);
+                    valIdx++;
+                }
+                else // literal separator
+                {
+                    sb.Append(match.Groups[g].Value);
+                }
+            }
+            return sb.ToString();
+        });
     }
 
     private static XmlElement AppendChild(XmlNode parent, string prefix, string localName, string ns,
