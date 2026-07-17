@@ -186,8 +186,8 @@ public class OllamaService
 
         if (byTower.TryGetValue("CLOUD", out var cloudEmails))
         {
-            StatusUpdate?.Invoke("Summing Cloud server counts...");
-            (metrics.CloudServers, metrics.CloudBreakdown) = SumMatches(CombineBodies(cloudEmails), ServerCountRegex);
+            StatusUpdate?.Invoke("Reading Cloud Total VMs...");
+            metrics.CloudServers = ExtractTotalVms(CombineBodies(cloudEmails));
         }
 
         return metrics;
@@ -220,8 +220,9 @@ public class OllamaService
         {{text}}
         """;
 
-    // "<number> servers" — one per environment/line; summed for the Cloud total.
-    private static readonly Regex ServerCountRegex = new(@"(\d[\d,]*)\s+servers?\b", RegexOptions.IgnoreCase);
+    // Cloud total = the "Total VMs" figure the Cloud tower reports (number after or before the label).
+    private static readonly Regex TotalVmsAfterRegex = new(@"total\s+vm['’]?s?\b\s*[:=\-]?\s*(\d[\d,]*)", RegexOptions.IgnoreCase);
+    private static readonly Regex TotalVmsBeforeRegex = new(@"(\d[\d,]*)\s+total\s+vm['’]?s?\b", RegexOptions.IgnoreCase);
     // "<number> databases", "<number> SQL databases", or "<number> DBs" — summed for the DBA total.
     private static readonly Regex DatabaseCountRegex = new(@"(\d[\d,]*)\s+(?:sql\s+)?(?:databases?|dbs?)\b", RegexOptions.IgnoreCase);
 
@@ -236,6 +237,14 @@ public class OllamaService
 
         if (parts.Count == 0) return (null, null);
         return (parts.Sum(), string.Join(" + ", parts));
+    }
+
+    // Reads the single "Total VMs" figure from the Cloud tower email (label may lead or trail the number).
+    private static int? ExtractTotalVms(string text)
+    {
+        var m = TotalVmsAfterRegex.Match(text);
+        if (!m.Success) m = TotalVmsBeforeRegex.Match(text);
+        return m.Success && int.TryParse(m.Groups[1].Value.Replace(",", ""), out var n) ? n : null;
     }
 
     // Pulls integer values out of the model's JSON reply, tolerating extra prose around it.
