@@ -8,3 +8,6 @@ publish/
 
 # OutlookSearch lives here as its own repo (github.com/joc00p/OutlookSearch)
 /OutlookSearch/
+
+# IRCServer lives here as its own repo (github.com/joc00p/IRCServer)
+/code/IRCServer/
