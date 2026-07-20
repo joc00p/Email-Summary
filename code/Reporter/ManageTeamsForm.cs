@@ -228,7 +228,13 @@ public class ManageTeamsForm : Form
 
         Task.Run(() => _searchAddressBook(query), token).ContinueWith(t =>
         {
-            if (token.IsCancellationRequested || t.IsFaulted) return;
+            if (token.IsCancellationRequested) return;
+            if (t.IsFaulted)
+            {
+                _ = t.Exception; // observe to prevent unobserved task exception
+                Invoke(() => _searchStatus.Text = "Search failed — Outlook unavailable");
+                return;
+            }
             var results = t.Result;
             Invoke(() =>
             {

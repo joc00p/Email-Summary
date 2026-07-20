@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -67,7 +68,7 @@ public class MainForm : Form
     {
         _pptx = new PowerPointService(_appSettings.TemplatePath, _teamConfig);
         _ollama = new OllamaService(_teamConfig);
-        _ollama.StatusUpdate += msg => Invoke(() => SetStatus(msg));
+        _ollama.StatusUpdate += msg => { if (IsHandleCreated && !IsDisposed) BeginInvoke(() => SetStatus(msg)); };
         BuildUI();
     }
 
@@ -230,6 +231,14 @@ public class MainForm : Form
         ApplyTheme();
     }
 
+    protected override void OnFormClosing(FormClosingEventArgs e)
+    {
+        _cts?.Cancel();
+        _cts?.Dispose();
+        _cts = null;
+        base.OnFormClosing(e);
+    }
+
     private void ThemeBtn_Click(object? sender, EventArgs e)
     {
         _isDark = _themeToggle.IsDark;
@@ -327,10 +336,11 @@ public class MainForm : Form
         var selectedWeeks = new List<string>();
         foreach (var item in _weekList.SelectedItems)
             if (item is string w) selectedWeeks.Add(w);
+        selectedWeeks.Sort((a, b) => ParseWeekStart(a).CompareTo(ParseWeekStart(b)));
 
         _lastWeekLabel = selectedWeeks.Count == 1
             ? selectedWeeks[0]
-            : $"{selectedWeeks[^1]} through {selectedWeeks[0]}";
+            : $"{selectedWeeks[0]} through {selectedWeeks[^1]}";
 
         string cacheKey = string.Join("|", selectedWeeks);
         if (_reportCache.TryGetValue(cacheKey, out var cached))
@@ -404,6 +414,7 @@ public class MainForm : Form
         foreach (var item in _weekList.SelectedItems)
             if (item is string w) selectedWeeks.Add(w);
         if (selectedWeeks.Count == 0) return;
+        selectedWeeks.Sort((a, b) => ParseWeekStart(a).CompareTo(ParseWeekStart(b)));
 
         _cts?.Cancel();
         var cts = new CancellationTokenSource();
@@ -415,7 +426,7 @@ public class MainForm : Form
 
         string weekLabel = selectedWeeks.Count == 1
             ? selectedWeeks[0]
-            : $"{selectedWeeks[^1]} through {selectedWeeks[0]}";
+            : $"{selectedWeeks[0]} through {selectedWeeks[^1]}";
 
         SetBusy(true, $"Generating report for {weekLabel} ({allEmails.Count} email(s))...");
         _generateMenuItem.Enabled = false;
@@ -453,11 +464,9 @@ public class MainForm : Form
             {
                 SetBusy(false, "");
                 _generateMenuItem.Enabled = true;
+                _cts = null;
             }
-            else
-            {
-                cts.Dispose(); // this run was superseded; release its own CTS
-            }
+            cts.Dispose();
         }
     }
 
@@ -564,6 +573,14 @@ public class MainForm : Form
         if (m.CloudServers.HasValue)
             parts.Add(m.CloudBreakdown is { } cb && cb.Contains('+') ? $"Cloud {m.CloudServers} ({cb})" : $"Cloud {m.CloudServers}");
         return "Counts — " + string.Join(", ", parts);
+    }
+
+    private static DateTime ParseWeekStart(string weekLabel)
+    {
+        // "Week of Jun 23 - Jun 29, 2025" — borrow the year from the end date portion
+        var m = Regex.Match(weekLabel, @"Week of (\w+ \d+)\s*-\s*\w+\.?\s+\d+,?\s*(\d{4})");
+        if (!m.Success) return DateTime.MinValue;
+        return DateTime.TryParse($"{m.Groups[1].Value} {m.Groups[2].Value}", out var dt) ? dt : DateTime.MinValue;
     }
 
     private void SetBusy(bool busy, string msg)

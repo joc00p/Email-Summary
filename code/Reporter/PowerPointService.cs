@@ -98,8 +98,17 @@ public class PowerPointService
                 continue;
 
             var rows = table.SelectNodes("a:tr", nsm)!.Cast<XmlNode>().ToList();
-            if (rows.Count >= 3)
-                kaCell = rows[2].SelectSingleNode("a:tc[1]", nsm);
+            // Find the content row: first row after the header whose first cell doesn't repeat the header text
+            for (int r = 1; r < rows.Count; r++)
+            {
+                var cellText = string.Concat(
+                    rows[r].SelectNodes("a:tc[1]//a:t", nsm)!.Cast<XmlNode>().Select(n => n.InnerText));
+                if (!cellText.Trim().StartsWith("Key Accomplishments", StringComparison.OrdinalIgnoreCase))
+                {
+                    kaCell = rows[r].SelectSingleNode("a:tc[1]", nsm);
+                    break;
+                }
+            }
             break;
         }
 
@@ -259,8 +268,17 @@ public class PowerPointService
             if (!firstCellText.Trim().StartsWith("Executive Summary", StringComparison.OrdinalIgnoreCase))
                 continue;
             var rows = table.SelectNodes("a:tr", nsm)!.Cast<XmlNode>().ToList();
-            if (rows.Count >= 2)
-                contentCell = rows[1].SelectSingleNode("a:tc[1]", nsm);
+            // Find the content row: first row after the header whose first cell doesn't repeat the header text
+            for (int r = 1; r < rows.Count; r++)
+            {
+                var cellText = string.Concat(
+                    rows[r].SelectNodes("a:tc[1]//a:t", nsm)!.Cast<XmlNode>().Select(n => n.InnerText));
+                if (!cellText.Trim().StartsWith("Executive Summary", StringComparison.OrdinalIgnoreCase))
+                {
+                    contentCell = rows[r].SelectSingleNode("a:tc[1]", nsm);
+                    break;
+                }
+            }
             break;
         }
 

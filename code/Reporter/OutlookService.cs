@@ -21,61 +21,72 @@ public class OutlookService
 
         var diagnostics = new StringBuilder();
         dynamic? folder = null;
+        dynamic? items = null;
 
-        foreach (dynamic account in ns.Folders)
+        try
         {
-            try
+            foreach (dynamic account in ns.Folders)
             {
-                string accountName = (string)account.Name;
-                diagnostics.AppendLine($"Account: {accountName}");
-                folder = FindFolder(account, TargetFolder, diagnostics, 1);
-                if (folder != null) break;
+                try
+                {
+                    string accountName = (string)account.Name;
+                    diagnostics.AppendLine($"Account: {accountName}");
+                    folder = FindFolder(account, TargetFolder, diagnostics, 1);
+                    if (folder != null) break;
+                }
+                catch (System.Exception ex)
+                {
+                    diagnostics.AppendLine($"  ERROR: {ex.Message}");
+                }
             }
-            catch (System.Exception ex)
+
+            if (folder == null)
+                throw new InvalidOperationException(
+                    $"Could not find '{TargetFolder}' folder.\n\nFolders scanned:\n{diagnostics}");
+
+            items = folder.Items;
+            items.Sort("[ReceivedTime]", true);
+
+            var byWeek = new Dictionary<string, List<EmailItem>>();
+
+            foreach (dynamic msg in items)
             {
-                diagnostics.AppendLine($"  ERROR: {ex.Message}");
+                try
+                {
+                    // 43 = olMailItem
+                    if ((int)msg.Class != 43) continue;
+
+                    object rawTime = msg.ReceivedTime;
+                    DateTime received = rawTime is double d
+                        ? DateTime.FromOADate(d)
+                        : Convert.ToDateTime(rawTime);
+
+                    string body = StripQuotedContent((string)msg.Body ?? "");
+                    if (string.IsNullOrWhiteSpace(body)) continue;
+
+                    string week = GetWeekLabel(received);
+                    if (!byWeek.ContainsKey(week))
+                        byWeek[week] = new List<EmailItem>();
+
+                    byWeek[week].Add(new EmailItem(
+                        (string)msg.Subject ?? "",
+                        (string)msg.SenderName ?? "",
+                        received.ToString("ddd MMM dd hh:mm tt"),
+                        body.Trim()
+                    ));
+                }
+                catch (System.Runtime.InteropServices.COMException) { }
             }
+
+            return byWeek;
         }
-
-        if (folder == null)
-            throw new InvalidOperationException(
-                $"Could not find '{TargetFolder}' folder.\n\nFolders scanned:\n{diagnostics}");
-
-        dynamic items = folder.Items;
-        items.Sort("[ReceivedTime]", true);
-
-        var byWeek = new Dictionary<string, List<EmailItem>>();
-
-        foreach (dynamic msg in items)
+        finally
         {
-            try
-            {
-                // 43 = olMailItem
-                if ((int)msg.Class != 43) continue;
-
-                object rawTime = msg.ReceivedTime;
-                DateTime received = rawTime is double d
-                    ? DateTime.FromOADate(d)
-                    : Convert.ToDateTime(rawTime);
-
-                string body = StripQuotedContent((string)msg.Body ?? "");
-                if (string.IsNullOrWhiteSpace(body)) continue;
-
-                string week = GetWeekLabel(received);
-                if (!byWeek.ContainsKey(week))
-                    byWeek[week] = new List<EmailItem>();
-
-                byWeek[week].Add(new EmailItem(
-                    (string)msg.Subject ?? "",
-                    (string)msg.SenderName ?? "",
-                    received.ToString("ddd MMM dd hh:mm tt"),
-                    body.Trim()
-                ));
-            }
-            catch { }
+            if (items != null) try { Marshal.ReleaseComObject(items); } catch { }
+            if (folder != null) try { Marshal.ReleaseComObject(folder); } catch { }
+            try { Marshal.ReleaseComObject(ns); } catch { }
+            try { Marshal.ReleaseComObject(outlook); } catch { }
         }
-
-        return byWeek;
     }
 
     public List<string> SearchAddressBook(string query, int maxResults = 100)
@@ -83,12 +94,14 @@ public class OutlookService
         var results = new List<string>();
         if (string.IsNullOrWhiteSpace(query) || query.Length < 2) return results;
 
+        dynamic? outlook = null;
+        dynamic? ns = null;
         try
         {
             var outlookType = Type.GetTypeFromProgID("Outlook.Application")
                 ?? throw new InvalidOperationException("Outlook not found.");
-            dynamic outlook = Activator.CreateInstance(outlookType)!;
-            dynamic ns = outlook.GetNamespace("MAPI");
+            outlook = Activator.CreateInstance(outlookType)!;
+            ns = outlook.GetNamespace("MAPI");
 
             foreach (dynamic addrList in ns.AddressLists)
             {
@@ -135,6 +148,11 @@ public class OutlookService
             }
         }
         catch { }
+        finally
+        {
+            if (ns != null) try { Marshal.ReleaseComObject(ns); } catch { }
+            if (outlook != null) try { Marshal.ReleaseComObject(outlook); } catch { }
+        }
 
         return Finish(results);
 
@@ -177,7 +195,7 @@ public class OutlookService
             // Stop at common Outlook quote/forward separators only
             if (trimmed.StartsWith("-----Original Message-----", StringComparison.OrdinalIgnoreCase) ||
                 trimmed.StartsWith("________________________________", StringComparison.OrdinalIgnoreCase) ||
-                (trimmed.StartsWith("On ") && trimmed.Contains(" wrote:")))
+                (trimmed.StartsWith("On ") && System.Text.RegularExpressions.Regex.IsMatch(trimmed, @"\bwrote:\s*$")))
                 break;
 
             result.AppendLine(line);

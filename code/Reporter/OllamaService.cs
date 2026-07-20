@@ -278,8 +278,8 @@ public class OllamaService
     private static int? TryExtractInt(string? s)
     {
         if (string.IsNullOrWhiteSpace(s)) return null;
-        var digits = new string(s.Where(char.IsDigit).ToArray());
-        return int.TryParse(digits, out var n) ? n : null;
+        var m = Regex.Match(s, @"\d+");
+        return m.Success && int.TryParse(m.Value, out var n) ? n : null;
     }
 
     // Matches a risk *label* line: an optional bullet, a risk keyword, then a colon/dash.
@@ -313,8 +313,14 @@ public class OllamaService
             if (inRiskBlock)
             {
                 var t = line.TrimStart();
-                if (t.StartsWith('-') || t.StartsWith('•') || t.StartsWith('*'))
-                    continue; // still inside the risk bullet list
+                bool isIndented = line.Length > 0 && t.Length < line.Length;
+                // Stay in block for: bullets, numbered items, bold markers, blank lines, indented continuations
+                if (string.IsNullOrWhiteSpace(t) ||
+                    t.StartsWith('-') || t.StartsWith('•') || t.StartsWith('*') ||
+                    t.StartsWith("**") ||
+                    Regex.IsMatch(t, @"^\d+\.") ||
+                    isIndented)
+                    continue;
                 inRiskBlock = false; // block ended — fall through and keep this line
             }
 
