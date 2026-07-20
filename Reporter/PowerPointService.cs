@@ -85,6 +85,17 @@ public class PowerPointService
 
     private string GetTeam(string personName) => _teamConfig.GetTeam(personName);
 
+    // Lines that feed the Managed Services Tasks counts (SAP instances/servers, DB counts,
+    // Total VMs) — excluded from Key Accomplishments so those numbers aren't duplicated there.
+    private static readonly Regex[] MetricLinePatterns =
+    {
+        new(@"\d[\d,]*\s+instances?\s+on\s+(?:sap\s+)?(?:rise|xeta)\b", RegexOptions.IgnoreCase),
+        new(@"\d[\d,]*\s+(?:sql\s+)?(?:databases?|dbs?)\b", RegexOptions.IgnoreCase),
+        new(@"total\s+vm['’]?s?\b", RegexOptions.IgnoreCase),
+    };
+
+    private static bool IsMetricLine(string bullet) => MetricLinePatterns.Any(rx => rx.IsMatch(bullet));
+
     private void UpdateKeyAccomplishments(XmlDocument doc, XmlNamespaceManager nsm, string reportText)
     {
         // Find the table whose first cell header is "Key Accomplishments"
@@ -137,7 +148,7 @@ public class PowerPointService
             // Round-robin: take 1 bullet from each member in turn, repeat until 5 total
             const int MaxPerTeam = 5;
             var memberBullets = members
-                .Select(m => m.Bullets.Where(b => !string.IsNullOrWhiteSpace(b)).ToList())
+                .Select(m => m.Bullets.Where(b => !string.IsNullOrWhiteSpace(b) && !IsMetricLine(b)).ToList())
                 .Where(b => b.Count > 0)
                 .ToList();
             var allBullets = new List<string>();
