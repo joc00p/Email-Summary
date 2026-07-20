@@ -14,3 +14,9 @@ publish/
 
 # IRCBot lives here as its own repo (github.com/joc00p/IRCBot)
 /code/IRCBot/
+
+# SSHClient lives here as its own repo (github.com/joc00p/SSHClient)
+/SSHClient/
+
+# EtherNetTools lives here as its own repo (github.com/joc00p/EtherNetTools)
+/EtherNetTools/
