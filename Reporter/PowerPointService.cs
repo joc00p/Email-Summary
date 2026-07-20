@@ -98,16 +98,18 @@ public class PowerPointService
                 continue;
 
             var rows = table.SelectNodes("a:tr", nsm)!.Cast<XmlNode>().ToList();
-            // Find the content row: first row after the header whose first cell doesn't repeat the header text
+            // Find the real content cell: the first column-0 cell after the header that is NOT a
+            // merge continuation. The "Key Accomplishments" header spans down with rowSpan, so the
+            // next row's cell is a vMerge continuation — writing there renders nothing. Skip those.
             for (int r = 1; r < rows.Count; r++)
             {
+                if (rows[r].SelectSingleNode("a:tc[1]", nsm) is not XmlElement firstCell) continue;
+                if (firstCell.HasAttribute("vMerge") || firstCell.HasAttribute("hMerge")) continue;
                 var cellText = string.Concat(
-                    rows[r].SelectNodes("a:tc[1]//a:t", nsm)!.Cast<XmlNode>().Select(n => n.InnerText));
-                if (!cellText.Trim().StartsWith("Key Accomplishments", StringComparison.OrdinalIgnoreCase))
-                {
-                    kaCell = rows[r].SelectSingleNode("a:tc[1]", nsm);
-                    break;
-                }
+                    firstCell.SelectNodes(".//a:t", nsm)!.Cast<XmlNode>().Select(n => n.InnerText));
+                if (cellText.Trim().StartsWith("Key Accomplishments", StringComparison.OrdinalIgnoreCase)) continue;
+                kaCell = firstCell;
+                break;
             }
             break;
         }
