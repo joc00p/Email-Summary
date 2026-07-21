@@ -89,10 +89,17 @@ public class PowerPointService
     // Total VMs) — excluded from Key Accomplishments so those numbers aren't duplicated there.
     private static readonly Regex[] MetricLinePatterns =
     {
+        // SAP: "22 instances on RISE with 110 servers"
         new(@"\d[\d,]*\s+instances?\s+on\s+(?:sap\s+)?(?:rise|xeta)\b", RegexOptions.IgnoreCase),
+        // "197 SQL databases" / "52 DBs"
         new(@"\d[\d,]*\s+(?:sql\s+)?(?:databases?|dbs?)\b", RegexOptions.IgnoreCase),
+        // "Total VMs: 126"
         new(@"total\s+vm['’]?s?\b", RegexOptions.IgnoreCase),
-        // Bare count breakdowns like "RHEL - 31", "SLES - 49", "Windows: 42" (OS/VM tallies)
+        // A number immediately before an infra noun: "110 servers", "126 VMs", "22 instances", "31 nodes"
+        new(@"\b\d[\d,]*\s+(?:servers?|vms?|virtual\s+machines?|instances?|nodes?|hosts?|machines?)\b", RegexOptions.IgnoreCase),
+        // An infra noun immediately before a number: "Servers: 126", "VMs - 42", "Databases: 197"
+        new(@"\b(?:servers?|vms?|instances?|databases?|dbs?|nodes?|hosts?|machines?)\s*[-:]\s*\d", RegexOptions.IgnoreCase),
+        // Bare tally line: "RHEL - 31", "SLES: 49", "Windows - 42", "Ubuntu - 4"
         new(@"^\s*[A-Za-z][A-Za-z ._/]*\s*[-:]\s*\d[\d,]*\s*$", RegexOptions.IgnoreCase),
     };
 
