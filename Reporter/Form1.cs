@@ -119,11 +119,16 @@ public class MainForm : Form
         _generateMenuItem.Click += GenerateReport_Click;
         teamsItem.Click         += ManageTeams_Click;
 
+        var pptxFromFileItem = new ToolStripMenuItem("Export PPTX from File...");
+        pptxFromFileItem.Click += ExportPptxFromFile_Click;
+
         var reportMenu = new ToolStripMenuItem("Report");
         reportMenu.DropDownItems.AddRange(new ToolStripItem[]
         {
             _generateMenuItem,
             _pptxMenuItem,
+            new ToolStripSeparator(),
+            pptxFromFileItem,
         });
 
         // Tools menu
@@ -541,6 +546,71 @@ public class MainForm : Form
             MessageBox.Show($"Failed to export PPTX:\n\n{ex.Message}", "Export Error",
                 MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
+    }
+
+    private void ExportPptxFromFile_Click(object? sender, EventArgs e)
+    {
+        if (!_pptx.TemplateExists)
+        {
+            MessageBox.Show(
+                $"Template not found. Place your template file at:\n\n{_pptx.TemplatePath}",
+                "Template Missing", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        using var openDlg = new OpenFileDialog
+        {
+            Title = "Select Report Text File",
+            Filter = "Text File|*.txt|All Files|*.*",
+            CheckFileExists = true,
+        };
+        if (openDlg.ShowDialog() != DialogResult.OK) return;
+
+        string reportText;
+        try
+        {
+            reportText = System.IO.File.ReadAllText(openDlg.FileName);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Could not read file:\n\n{ex.Message}", "Read Error",
+                MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+
+        string weekLabel = ExtractWeekLabelFromReport(reportText)
+            ?? System.IO.Path.GetFileNameWithoutExtension(openDlg.FileName);
+
+        var safe = string.Join("_", weekLabel.Split(System.IO.Path.GetInvalidFileNameChars()));
+        using var saveDlg = new SaveFileDialog
+        {
+            FileName = $"RTX_{safe}.pptx",
+            Filter = "PowerPoint Presentation|*.pptx|All Files|*.*",
+            Title = "Export PowerPoint Report",
+        };
+        if (saveDlg.ShowDialog() != DialogResult.OK) return;
+
+        try
+        {
+            _pptx.Export(weekLabel, reportText, new TowerMetrics(), saveDlg.FileName);
+            SetStatus($"PPTX exported from file: {System.IO.Path.GetFileName(saveDlg.FileName)}");
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Failed to export PPTX:\n\n{ex.Message}", "Export Error",
+                MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private static string? ExtractWeekLabelFromReport(string reportText)
+    {
+        foreach (var rawLine in reportText.Split('\n'))
+        {
+            var m = Regex.Match(rawLine.Trim(),
+                @"##\s*STATUS REPORT\s*[—–\-]\s*(.+)", RegexOptions.IgnoreCase);
+            if (m.Success) return m.Groups[1].Value.Trim();
+        }
+        return null;
     }
 
     private void ManageTeams_Click(object? sender, EventArgs e)
