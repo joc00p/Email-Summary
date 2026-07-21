@@ -14,6 +14,7 @@ public class OllamaService
 {
     private const string Url = "http://localhost:11434/api/generate";
     private const string Model = "llama3.2";
+    private const int MaxBulletsPerTower = 5;
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromMinutes(10) };
     private readonly TeamConfig _teamConfig;
 
@@ -104,24 +105,28 @@ public class OllamaService
             personSummaries.Add((group.Key, trimmed));
         }
 
-        // Step 2: Build the full report from individual summaries
+        // Step 2: Group people by tower.
         StatusUpdate?.Invoke("Assembling report...");
-        var teamSection = new StringBuilder();
-        foreach (var (name, summary) in personSummaries)
-        {
-            teamSection.AppendLine($"**{name}**");
-            teamSection.AppendLine(summary);
-            teamSection.AppendLine();
-        }
-
-        // Step 3: Build a tower-grouped section for the exec prompt (no individual names)
-        var towerOrder = TeamConfig.TowerNames.Append("Other").ToArray();
         var byTower = personSummaries
             .GroupBy(p => _teamConfig.GetTeam(p.Name))
             .ToDictionary(g => g.Key, g => g.ToList());
 
+        // Team Updates: grouped by tower, HARD-CAPPED at 5 bullets per tower (round-robin across
+        // that tower's members). This is the single place the "max 5 per tower" rule is enforced.
+        var teamSection = new StringBuilder();
+        foreach (var tower in TeamConfig.TowerNames)
+        {
+            if (!byTower.TryGetValue(tower, out var members) || members.Count == 0) continue;
+            var bullets = TopBulletsPerTower(members, MaxBulletsPerTower);
+            if (bullets.Count == 0) continue;
+            teamSection.AppendLine($"**{tower}**");
+            foreach (var b in bullets) teamSection.AppendLine($"- {b}");
+            teamSection.AppendLine();
+        }
+
+        // Exec-summary input: every tower's full (uncapped) bullet set, for context only.
         var towerSection = new StringBuilder();
-        foreach (var tower in towerOrder)
+        foreach (var tower in TeamConfig.TowerNames.Append("Other"))
         {
             if (!byTower.TryGetValue(tower, out var members) || members.Count == 0) continue;
             towerSection.AppendLine($"**{tower}**");
@@ -212,6 +217,36 @@ public class OllamaService
         }
 
         return Task.FromResult(metrics);
+    }
+
+    // Round-robin across a tower's members (one bullet each per pass) up to max, so no tower
+    // ever shows more than `max` bullets and multiple reporters are represented fairly.
+    private static List<string> TopBulletsPerTower(List<(string Name, string Summary)> members, int max)
+    {
+        var perMember = members
+            .Select(m => m.Summary.Split('\n')
+                .Select(l => l.TrimStart().TrimStart('-', '•').Trim())
+                .Where(l => l.Length > 0)
+                .ToList())
+            .Where(l => l.Count > 0)
+            .ToList();
+
+        var result = new List<string>();
+        for (int round = 0; result.Count < max; round++)
+        {
+            bool added = false;
+            foreach (var bl in perMember)
+            {
+                if (round < bl.Count)
+                {
+                    result.Add(bl[round]);
+                    added = true;
+                    if (result.Count >= max) break;
+                }
+            }
+            if (!added) break;
+        }
+        return result;
     }
 
     private static string CombineBodies(List<EmailItem> emails)

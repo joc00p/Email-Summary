@@ -45,6 +45,11 @@ public class TeamConfig
 
     public string GetTeam(string senderName)
     {
+        // The report is grouped by tower, so a section header may already be a tower name.
+        foreach (var t in TowerNames)
+            if (string.Equals(senderName.Trim(), t, StringComparison.OrdinalIgnoreCase))
+                return t;
+
         var lower = senderName.ToLowerInvariant();
         foreach (var (team, members) in Teams)
             foreach (var m in members)
