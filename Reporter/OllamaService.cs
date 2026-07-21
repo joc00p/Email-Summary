@@ -87,6 +87,7 @@ public class OllamaService
                 .Where(l => !l.Contains("Coopersmith", StringComparison.OrdinalIgnoreCase))
                 .Where(l => !l.Contains("punch list", StringComparison.OrdinalIgnoreCase))
                 .Where(l => !IsFillerBullet(l))
+                .Where(l => !IsCountLine(l))
                 .Take(6)
                 .ToList();
             if (bulletLines.Count == 0)
@@ -322,6 +323,25 @@ public class OllamaService
             RegexOptions.IgnoreCase).Trim().TrimEnd('.', ' ');
         if (b.Length == 0) return "On PTO";
         return b.Length > 120 ? b.Substring(0, 120).Trim() : b;
+    }
+
+    // Count / inventory lines that belong in the Managed Services Tasks pane, not the accomplishments
+    // narrative: SAP RISE/Xeta instances & servers, DB counts, Total VMs, "N servers/VMs/instances",
+    // "Servers: N", and bare "RHEL - 31" tallies. Kept in sync with PowerPointService.MetricLinePatterns.
+    private static readonly Regex[] CountLinePatterns =
+    {
+        new(@"\d[\d,]*\s+instances?\s+on\s+(?:sap\s+)?(?:rise|xeta)\b", RegexOptions.IgnoreCase),
+        new(@"\d[\d,]*\s+(?:sql\s+)?(?:databases?|dbs?)\b", RegexOptions.IgnoreCase),
+        new(@"total\s+vm['’]?s?\b", RegexOptions.IgnoreCase),
+        new(@"\b\d[\d,]*\s+(?:[A-Za-z]+\s+)?(?:servers?|vms?|virtual\s+machines?|instances?|nodes?|hosts?|machines?)\b", RegexOptions.IgnoreCase),
+        new(@"\b(?:servers?|vms?|instances?|databases?|dbs?|nodes?|hosts?|machines?)\s*[-:]\s*\d", RegexOptions.IgnoreCase),
+        new(@"^[A-Za-z][A-Za-z ._/]*\s*[-:]\s*\d[\d,]*\s*$", RegexOptions.IgnoreCase),
+    };
+
+    private static bool IsCountLine(string line)
+    {
+        var s = line.TrimStart(' ', '\t', '-', '•', '*').Trim();
+        return CountLinePatterns.Any(rx => rx.IsMatch(s));
     }
 
     // True for "absence of content" filler the model sometimes emits when an update is trivial
