@@ -95,8 +95,9 @@ public class PowerPointService
         new(@"\d[\d,]*\s+(?:sql\s+)?(?:databases?|dbs?)\b", RegexOptions.IgnoreCase),
         // "Total VMs: 126"
         new(@"total\s+vm['’]?s?\b", RegexOptions.IgnoreCase),
-        // A number immediately before an infra noun: "110 servers", "126 VMs", "22 instances", "31 nodes"
-        new(@"\b\d[\d,]*\s+(?:servers?|vms?|virtual\s+machines?|instances?|nodes?|hosts?|machines?)\b", RegexOptions.IgnoreCase),
+        // A number before an infra noun, allowing one qualifier word: "110 servers", "126 VMs",
+        // "19 XETA servers", "110 RISE servers", "22 instances", "31 nodes"
+        new(@"\b\d[\d,]*\s+(?:[A-Za-z]+\s+)?(?:servers?|vms?|virtual\s+machines?|instances?|nodes?|hosts?|machines?)\b", RegexOptions.IgnoreCase),
         // An infra noun immediately before a number: "Servers: 126", "VMs - 42", "Databases: 197"
         new(@"\b(?:servers?|vms?|instances?|databases?|dbs?|nodes?|hosts?|machines?)\s*[-:]\s*\d", RegexOptions.IgnoreCase),
         // Bare tally line: "RHEL - 31", "SLES: 49", "Windows - 42", "Ubuntu - 4"
