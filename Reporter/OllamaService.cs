@@ -14,7 +14,6 @@ public class OllamaService
 {
     private const string Url = "http://localhost:11434/api/generate";
     private const string Model = "llama3.2";
-    private const int MaxBulletsPerTower = 5;
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromMinutes(10) };
     private readonly TeamConfig _teamConfig;
 
@@ -22,49 +21,38 @@ public class OllamaService
 
     public event Action<string>? StatusUpdate;
 
-    // Per-person summarization (the expensive Ollama step): one filtered bullet list per reporter.
+    // Summarizes EACH email separately (not merged per sender) so a multi-week selection surfaces every
+    // week's points as candidates, instead of collapsing a person's weeks into one ~8-bullet summary.
     private async Task<List<(string Name, string Summary)>> SummarizePeopleAsync(string weekLabel, List<EmailItem> emails, CancellationToken ct)
     {
-        // Group emails by sender, exclude Joel Coopersmith
-        var bySender = emails
+        var relevant = emails
             .Where(e => !e.From.Contains("Coopersmith", StringComparison.OrdinalIgnoreCase))
-            .GroupBy(e => e.From)
-            .OrderBy(g => g.Key)
+            .Where(e => !string.IsNullOrWhiteSpace(e.Body))
             .ToList();
 
-        // Step 1: Summarize each person individually
-        var personSummaries = new List<(string Name, string Summary)>();
-        foreach (var group in bySender)
+        var results = new List<(string Name, string Summary)>();
+        int idx = 0;
+        foreach (var e in relevant)
         {
             ct.ThrowIfCancellationRequested();
-            StatusUpdate?.Invoke($"Summarizing {group.Key} ({personSummaries.Count + 1}/{bySender.Count})...");
+            StatusUpdate?.Invoke($"Summarizing {e.From} ({++idx}/{relevant.Count})...");
 
-            // Deterministic short-circuit: a brief "no work this period" note (PTO/OOO) becomes a
-            // single accurate bullet, bypassing the model so it can't pad it with fabricated activity.
-            var combinedBody = string.Join("\n", group.Select(e => e.Body));
-            if (IsNoWorkUpdate(combinedBody))
+            // Deterministic short-circuit: a brief "no work this period" note (PTO/OOO) → single bullet.
+            if (IsNoWorkUpdate(e.Body))
             {
-                personSummaries.Add((group.Key, "- " + NoWorkBullet(combinedBody)));
+                results.Add((e.From, "- " + NoWorkBullet(e.Body)));
                 continue;
             }
 
-            var blocks = new StringBuilder();
-            foreach (var e in group)
-            {
-                var excerpt = e.Body.Length > 6000 ? e.Body[..6000] : e.Body;
-                blocks.AppendLine($"Date: {e.Received}");
-                blocks.AppendLine($"Subject: {e.Subject}");
-                blocks.AppendLine(excerpt);
-                blocks.AppendLine();
-            }
-
+            var excerpt = e.Body.Length > 6000 ? e.Body[..6000] : e.Body;
             var prompt = $"""
-                You are summarizing work updates from one team member for a status report.
-                Person: {group.Key}
-                Period: {weekLabel}
+                You are summarizing one work update from a team member for a status report.
+                Person: {e.From}
+                Date: {e.Received}
+                Subject: {e.Subject}
 
-                Their submitted updates:
-                {blocks}
+                Their update:
+                {excerpt}
 
                 Extract only the activities, tasks, blockers, and next steps this person actually mentioned.
                 Output as concise bullet points starting with -. No intro text. Bullets only.
@@ -81,41 +69,28 @@ public class OllamaService
                 Do NOT use the phrase "punch list" or "punch lists" anywhere in your response.
                 """;
 
-            var summary = await CallOllama(prompt, ct);
-            var trimmed = summary.Trim();
-            // Always include this person — fall back to a raw excerpt if Ollama produced nothing usable
-            if (string.IsNullOrWhiteSpace(trimmed) || trimmed.StartsWith("(no updates)", StringComparison.OrdinalIgnoreCase))
-            {
-                var fallbackLine = group.First().Subject;
-                trimmed = $"- {(string.IsNullOrWhiteSpace(fallbackLine) ? "Updates submitted" : fallbackLine)}";
-            }
-            // Hard cap: keep at most 6 bullet lines; drop any mentioning Coopersmith
-            var bulletLines = trimmed.Split('\n')
+            var summary = (await CallOllama(prompt, ct)).Trim();
+            var bulletLines = summary.Split('\n')
                 .Where(l => l.TrimStart().StartsWith('-') || l.TrimStart().StartsWith('•'))
                 .Where(l => !l.Contains("Coopersmith", StringComparison.OrdinalIgnoreCase))
                 .Where(l => !l.Contains("punch list", StringComparison.OrdinalIgnoreCase))
                 .Where(l => !IsFillerBullet(l))
                 .Where(l => !IsCountLine(l))
-                .Take(6)
+                .Take(8)
                 .ToList();
-            if (bulletLines.Count == 0)
-            {
-                var fallbackLine = group.First().Subject;
-                trimmed = $"- {(string.IsNullOrWhiteSpace(fallbackLine) ? "Updates submitted" : fallbackLine)}";
-            }
-            else
-                trimmed = string.Join("\n", bulletLines);
-            personSummaries.Add((group.Key, trimmed));
+            if (bulletLines.Count > 0)
+                results.Add((e.From, string.Join("\n", bulletLines)));
         }
 
-        return personSummaries;
+        return results;
     }
 
-    // Step 1: candidate data points per tower (top-first order), for the user to pick from.
+    // Step 1: candidate data points per tower (every point from every selected week's emails,
+    // de-duplicated so repeated "ongoing" items don't appear multiple times). The user picks/edits/reorders.
     public async Task<Dictionary<string, List<string>>> ExtractDataPointsAsync(string weekLabel, List<EmailItem> emails, CancellationToken ct)
     {
-        var personSummaries = await SummarizePeopleAsync(weekLabel, emails, ct);
-        var byTower = personSummaries
+        var summaries = await SummarizePeopleAsync(weekLabel, emails, ct);
+        var byTower = summaries
             .GroupBy(p => _teamConfig.GetTeam(p.Name))
             .ToDictionary(g => g.Key, g => g.ToList());
 
@@ -123,11 +98,22 @@ public class OllamaService
         foreach (var tower in TeamConfig.TowerNames)
         {
             if (!byTower.TryGetValue(tower, out var members) || members.Count == 0) continue;
-            var candidates = TopBulletsPerTower(members, int.MaxValue); // all candidates, top-first
-            if (candidates.Count > 0) result[tower] = candidates;
+            var seen = new HashSet<string>();
+            var all = new List<string>();
+            foreach (var (_, summary) in members)
+                foreach (var line in summary.Split('\n'))
+                {
+                    var b = line.TrimStart().TrimStart('-', '•').Trim();
+                    if (b.Length > 0 && seen.Add(NormalizeForDedupe(b))) all.Add(b);
+                }
+            if (all.Count > 0) result[tower] = all;
         }
         return result;
     }
+
+    // Collapses trivial wording/punctuation differences so the same point across weeks de-dupes.
+    private static string NormalizeForDedupe(string s) =>
+        new string(s.ToLowerInvariant().Where(char.IsLetterOrDigit).ToArray());
 
     // Step 2: assemble the final report from the data points the user selected per tower.
     public async Task<string> BuildReportAsync(string weekLabel, Dictionary<string, List<string>> selectedByTower, CancellationToken ct)
@@ -227,36 +213,6 @@ public class OllamaService
         }
 
         return Task.FromResult(metrics);
-    }
-
-    // Round-robin across a tower's members (one bullet each per pass) up to max, so no tower
-    // ever shows more than `max` bullets and multiple reporters are represented fairly.
-    private static List<string> TopBulletsPerTower(List<(string Name, string Summary)> members, int max)
-    {
-        var perMember = members
-            .Select(m => m.Summary.Split('\n')
-                .Select(l => l.TrimStart().TrimStart('-', '•').Trim())
-                .Where(l => l.Length > 0)
-                .ToList())
-            .Where(l => l.Count > 0)
-            .ToList();
-
-        var result = new List<string>();
-        for (int round = 0; result.Count < max; round++)
-        {
-            bool added = false;
-            foreach (var bl in perMember)
-            {
-                if (round < bl.Count)
-                {
-                    result.Add(bl[round]);
-                    added = true;
-                    if (result.Count >= max) break;
-                }
-            }
-            if (!added) break;
-        }
-        return result;
     }
 
     private static string CombineBodies(List<EmailItem> emails)
