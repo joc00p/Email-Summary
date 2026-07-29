@@ -81,6 +81,7 @@ public class MainForm : Form
         MinimumSize = new Size(800, 600);
         StartPosition = FormStartPosition.CenterScreen;
         Font = new Font("Segoe UI", 10f);
+        try { Icon = System.Drawing.Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
 
         // Menu strip
         var menuStrip = new MenuStrip { Dock = DockStyle.Top };
