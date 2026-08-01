@@ -23,3 +23,9 @@ publish/
 
 # EtherNetTools lives here as its own repo (github.com/joc00p/EtherNetTools)
 /EtherNetTools/
+
+# TicTacToeHTML lives here as its own repo (github.com/joc00p/TicTacToeHTML)
+/TicTacToeHTML/
+
+# TicTacToe_C lives here as its own repo (github.com/joc00p/TicTacToe_C)
+/TicTacToe_C/
