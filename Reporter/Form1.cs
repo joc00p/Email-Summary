@@ -580,8 +580,9 @@ public class MainForm : Form
             Filter = "PowerPoint Presentation|*.pptx|All Files|*.*",
             Title = "Export PowerPoint Report"
         };
-        if (System.IO.Directory.Exists(_appSettings.LastExportDir))
-            dlg.InitialDirectory = _appSettings.LastExportDir;
+        var startDir = _appSettings.EffectiveExportDir;
+        if (System.IO.Directory.Exists(startDir))
+            dlg.InitialDirectory = startDir;
         if (dlg.ShowDialog() != DialogResult.OK) return;
 
         try
@@ -600,11 +601,11 @@ public class MainForm : Form
 
     private void OpenExportLocation_Click(object? sender, EventArgs e)
     {
-        var dir = _appSettings.LastExportDir;
+        var dir = _appSettings.EffectiveExportDir;
         if (string.IsNullOrWhiteSpace(dir) || !System.IO.Directory.Exists(dir))
         {
             MessageBox.Show(
-                "No export folder yet — export a PPTX first, then this opens that folder.",
+                "No export folder yet — set one in File → Settings, or export a PPTX first.",
                 "Open File Location", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }

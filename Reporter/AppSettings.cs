@@ -15,8 +15,15 @@ public class AppSettings
 
     public string TemplatePath { get; set; } = DefaultTemplatePath;
 
+    // User-chosen default folder for exports/reports (Settings). Blank = ask each time / use last-used folder.
+    public string ExportDir { get; set; } = "";
+
     // Folder of the most recent PPTX export — used to default the Save dialog and the "Open File Location" menu.
     public string LastExportDir { get; set; } = "";
+
+    // The folder exports should default to: the configured ExportDir if set/valid, else the last-used folder.
+    public string EffectiveExportDir =>
+        !string.IsNullOrWhiteSpace(ExportDir) && Directory.Exists(ExportDir) ? ExportDir : LastExportDir;
 
     public static AppSettings Load()
     {
