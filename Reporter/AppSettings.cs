@@ -13,10 +13,13 @@ public class AppSettings
     public static readonly string DefaultTemplatePath =
         Path.Combine(AppContext.BaseDirectory, "NEWTEMPLATE.pptx");
 
+    // Default export/report folder when the user hasn't chosen one — the folder the exe launches from.
+    public static readonly string DefaultExportDir = AppContext.BaseDirectory;
+
     public string TemplatePath { get; set; } = DefaultTemplatePath;
 
-    // User-chosen default folder for exports/reports (Settings). Blank = ask each time / use last-used folder.
-    public string ExportDir { get; set; } = "";
+    // User-chosen default folder for exports/reports (Settings). Defaults to the exe folder (see Load()).
+    public string ExportDir { get; set; } = DefaultExportDir;
 
     // Folder of the most recent PPTX export — used to default the Save dialog and the "Open File Location" menu.
     public string LastExportDir { get; set; } = "";
@@ -41,6 +44,10 @@ public class AppSettings
         // Fall back to the bundled template if the saved path is blank or no longer exists.
         if (string.IsNullOrWhiteSpace(settings.TemplatePath) || !File.Exists(settings.TemplatePath))
             settings.TemplatePath = DefaultTemplatePath;
+
+        // Default the export folder to the exe's directory when unset.
+        if (string.IsNullOrWhiteSpace(settings.ExportDir))
+            settings.ExportDir = DefaultExportDir;
 
         return settings;
     }
