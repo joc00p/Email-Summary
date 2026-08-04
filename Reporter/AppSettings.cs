@@ -15,6 +15,9 @@ public class AppSettings
 
     public string TemplatePath { get; set; } = DefaultTemplatePath;
 
+    // Folder of the most recent PPTX export — used to default the Save dialog and the "Open File Location" menu.
+    public string LastExportDir { get; set; } = "";
+
     public static AppSettings Load()
     {
         var settings = new AppSettings();

@@ -125,11 +125,15 @@ public class MainForm : Form
         var pptxFromFileItem = new ToolStripMenuItem("Export PPTX from File...");
         pptxFromFileItem.Click += ExportPptxFromFile_Click;
 
+        var openLocationItem = new ToolStripMenuItem("Open File Location");
+        openLocationItem.Click += OpenExportLocation_Click;
+
         var reportMenu = new ToolStripMenuItem("Report");
         reportMenu.DropDownItems.AddRange(new ToolStripItem[]
         {
             _generateMenuItem,
             _pptxMenuItem,
+            openLocationItem,
             new ToolStripSeparator(),
             pptxFromFileItem,
         });
@@ -576,16 +580,38 @@ public class MainForm : Form
             Filter = "PowerPoint Presentation|*.pptx|All Files|*.*",
             Title = "Export PowerPoint Report"
         };
+        if (System.IO.Directory.Exists(_appSettings.LastExportDir))
+            dlg.InitialDirectory = _appSettings.LastExportDir;
         if (dlg.ShowDialog() != DialogResult.OK) return;
 
         try
         {
             _pptx.Export(_lastWeekLabel, _reportBox.Text, _lastMetrics, _lastUpcoming, dlg.FileName);
+            _appSettings.LastExportDir = System.IO.Path.GetDirectoryName(dlg.FileName) ?? "";
+            _appSettings.Save();
             SetStatus($"PPTX exported: {System.IO.Path.GetFileName(dlg.FileName)}");
         }
         catch (Exception ex)
         {
             MessageBox.Show($"Failed to export PPTX:\n\n{ex.Message}", "Export Error",
+                MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private void OpenExportLocation_Click(object? sender, EventArgs e)
+    {
+        var dir = _appSettings.LastExportDir;
+        if (string.IsNullOrWhiteSpace(dir) || !System.IO.Directory.Exists(dir))
+        {
+            MessageBox.Show(
+                "No export folder yet — export a PPTX first, then this opens that folder.",
+                "Open File Location", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+        try { System.Diagnostics.Process.Start("explorer.exe", $"\"{dir}\""); }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Could not open folder:\n\n{ex.Message}", "Error",
                 MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
     }
