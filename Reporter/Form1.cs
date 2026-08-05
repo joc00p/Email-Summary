@@ -97,7 +97,7 @@ public class MainForm : Form
         _copyMenuItem.Click   += (_, _) =>
         {
             var text = _reportBox.SelectionLength > 0 ? _reportBox.SelectedText : _reportBox.Text;
-            if (!string.IsNullOrEmpty(text)) Clipboard.SetText(text);
+            CopyToClipboard(text);
         };
         _saveMenuItem.Click   += SaveReport_Click;
         _pptxMenuItem.Click   += ExportPptx_Click;
@@ -214,7 +214,7 @@ public class MainForm : Form
 
         var reportContextMenu = new ContextMenuStrip();
         var copyMenuItem = new ToolStripMenuItem("Copy");
-        copyMenuItem.Click += (_, _) => { if (_reportBox.SelectionLength > 0) Clipboard.SetText(_reportBox.SelectedText); };
+        copyMenuItem.Click += (_, _) => { if (_reportBox.SelectionLength > 0) CopyToClipboard(_reportBox.SelectedText); };
         var selectAllMenuItem = new ToolStripMenuItem("Select All");
         selectAllMenuItem.Click += (_, _) => _reportBox.SelectAll();
         reportContextMenu.Items.Add(copyMenuItem);
@@ -559,8 +559,33 @@ public class MainForm : Form
             Filter = "Text File|*.txt|All Files|*.*",
             Title = "Save Report"
         };
-        if (dlg.ShowDialog() == DialogResult.OK)
+        if (dlg.ShowDialog() != DialogResult.OK) return;
+        try
+        {
             System.IO.File.WriteAllText(dlg.FileName, _reportBox.Text);
+            SetStatus($"Report saved: {System.IO.Path.GetFileName(dlg.FileName)}");
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Could not save the report:\n\n{ex.Message}", "Save Error",
+                MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    // Clipboard access can fail transiently when another process holds the clipboard
+    // (RDP sessions, clipboard managers). Swallow the failure with a status note rather
+    // than letting it bubble up to the global unhandled-exception dialog.
+    private void CopyToClipboard(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return;
+        try
+        {
+            Clipboard.SetText(text);
+        }
+        catch (Exception)
+        {
+            SetStatus("Copy failed — the clipboard is in use by another app. Try again.");
+        }
     }
 
     private void ExportPptx_Click(object? sender, EventArgs e)

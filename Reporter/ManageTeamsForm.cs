@@ -232,11 +232,11 @@ public class ManageTeamsForm : Form
             if (t.IsFaulted)
             {
                 _ = t.Exception; // observe to prevent unobserved task exception
-                Invoke(() => _searchStatus.Text = "Search failed — Outlook unavailable");
+                SafeInvoke(() => _searchStatus.Text = "Search failed — Outlook unavailable");
                 return;
             }
             var results = t.Result;
-            Invoke(() =>
+            SafeInvoke(() =>
             {
                 if (token.IsCancellationRequested) return;
                 string tower = _towerCombo.SelectedItem as string ?? "";
@@ -258,6 +258,17 @@ public class ManageTeamsForm : Form
                 UpdateButtons();
             });
         }, TaskScheduler.Default);
+    }
+
+    // Marshals to the UI thread only if the form's handle is still alive. Guards the race where the
+    // dialog is closed while a background GAL search is still completing (Invoke on a destroyed
+    // handle would otherwise throw ObjectDisposedException / InvalidOperationException).
+    private void SafeInvoke(Action action)
+    {
+        if (IsDisposed || !IsHandleCreated) return;
+        try { Invoke(action); }
+        catch (ObjectDisposedException) { }
+        catch (InvalidOperationException) { }
     }
 
     private HashSet<string> GetCurrentMemberSet()
@@ -298,6 +309,8 @@ public class ManageTeamsForm : Form
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
         _searchCts?.Cancel();
+        _searchCts?.Dispose();
+        _searchCts = null;
         _debounce.Dispose();
         base.OnFormClosed(e);
     }

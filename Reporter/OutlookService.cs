@@ -23,9 +23,11 @@ public class OutlookService
         dynamic? folder = null;
         dynamic? items = null;
 
+        dynamic? accounts = null;
         try
         {
-            foreach (dynamic account in ns.Folders)
+            accounts = ns.Folders;
+            foreach (dynamic account in accounts)
             {
                 try
                 {
@@ -37,6 +39,10 @@ public class OutlookService
                 catch (System.Exception ex)
                 {
                     diagnostics.AppendLine($"  ERROR: {ex.Message}");
+                }
+                finally
+                {
+                    Release(account);
                 }
             }
 
@@ -76,17 +82,34 @@ public class OutlookService
                     ));
                 }
                 catch (System.Runtime.InteropServices.COMException) { }
+                finally
+                {
+                    Release(msg);
+                }
             }
 
             return byWeek;
         }
         finally
         {
-            if (items != null) try { Marshal.ReleaseComObject(items); } catch { }
-            if (folder != null) try { Marshal.ReleaseComObject(folder); } catch { }
-            try { Marshal.ReleaseComObject(ns); } catch { }
-            try { Marshal.ReleaseComObject(outlook); } catch { }
+            Release(accounts);
+            Release(items);
+            Release(folder);
+            Release(ns);
+            Release(outlook);
         }
+    }
+
+    // Releases a COM RCW without throwing. Ignores non-COM objects and nulls.
+    private static void Release(object? comObject)
+    {
+        if (comObject == null) return;
+        try
+        {
+            if (Marshal.IsComObject(comObject))
+                Marshal.ReleaseComObject(comObject);
+        }
+        catch { }
     }
 
     public List<string> SearchAddressBook(string query, int maxResults = 100)
@@ -103,49 +126,65 @@ public class OutlookService
             outlook = Activator.CreateInstance(outlookType)!;
             ns = outlook.GetNamespace("MAPI");
 
-            foreach (dynamic addrList in ns.AddressLists)
+            dynamic addrLists = ns.AddressLists;
+            try
             {
-                try
+                foreach (dynamic addrList in addrLists)
                 {
-                    dynamic entries = addrList.AddressEntries;
-                    // Try server-side Restrict filter first (fast for GAL)
+                    dynamic? entries = null;
+                    dynamic? restricted = null;
                     try
                     {
-                        string filter = $"[Name] ci_phw '{query}'";
-                        dynamic restricted = entries.Restrict(filter);
-                        foreach (dynamic entry in restricted)
+                        entries = addrList.AddressEntries;
+                        // Try server-side Restrict filter first (fast for GAL)
+                        try
                         {
-                            try
+                            string filter = $"[Name] ci_phw '{query}'";
+                            restricted = entries.Restrict(filter);
+                            foreach (dynamic entry in restricted)
                             {
-                                string name = (string)entry.Name;
-                                if (!string.IsNullOrWhiteSpace(name))
-                                    results.Add(name);
+                                try
+                                {
+                                    string name = (string)entry.Name;
+                                    if (!string.IsNullOrWhiteSpace(name))
+                                        results.Add(name);
+                                }
+                                catch { }
+                                finally { Release(entry); }
+                                if (results.Count >= maxResults) return Finish(results);
                             }
-                            catch { }
-                            if (results.Count >= maxResults) return Finish(results);
+                        }
+                        catch
+                        {
+                            // Fallback: iterate manually (safe for small lists like personal Contacts)
+                            int count = Math.Min((int)entries.Count, 500);
+                            for (int i = 1; i <= count; i++)
+                            {
+                                dynamic? entry = null;
+                                try
+                                {
+                                    entry = entries[i];
+                                    string name = (string)entry.Name;
+                                    if (!string.IsNullOrWhiteSpace(name) &&
+                                        name.Contains(query, StringComparison.OrdinalIgnoreCase))
+                                        results.Add(name);
+                                }
+                                catch { }
+                                finally { Release(entry); }
+                                if (results.Count >= maxResults) return Finish(results);
+                            }
                         }
                     }
-                    catch
+                    catch { }
+                    finally
                     {
-                        // Fallback: iterate manually (safe for small lists like personal Contacts)
-                        int count = Math.Min((int)entries.Count, 500);
-                        for (int i = 1; i <= count; i++)
-                        {
-                            try
-                            {
-                                dynamic entry = entries[i];
-                                string name = (string)entry.Name;
-                                if (!string.IsNullOrWhiteSpace(name) &&
-                                    name.Contains(query, StringComparison.OrdinalIgnoreCase))
-                                    results.Add(name);
-                            }
-                            catch { }
-                            if (results.Count >= maxResults) return Finish(results);
-                        }
+                        Release(restricted);
+                        Release(entries);
+                        Release(addrList);
                     }
                 }
-                catch { }
             }
+            finally { Release(addrLists); }
         }
         catch { }
         finally
@@ -162,23 +201,34 @@ public class OutlookService
 
     private static dynamic? FindFolder(dynamic parent, string name, StringBuilder log, int depth)
     {
+        dynamic? subFolders = null;
         try
         {
-            foreach (dynamic sub in parent.Folders)
+            subFolders = parent.Folders;
+            foreach (dynamic sub in subFolders)
             {
+                bool keep = false;
                 try
                 {
                     string subName = (string)sub.Name;
                     log.AppendLine($"{new string(' ', depth * 2)}{subName}");
                     if (subName.Contains(name, StringComparison.OrdinalIgnoreCase))
-                        return sub;
+                    {
+                        keep = true;
+                        return sub; // caller owns this RCW and releases it later
+                    }
                     var found = FindFolder(sub, name, log, depth + 1);
-                    if (found != null) return found;
+                    if (found != null) { return found; }
                 }
                 catch { }
+                finally
+                {
+                    if (!keep) Release(sub);
+                }
             }
         }
         catch { }
+        finally { Release(subFolders); }
         return null;
     }
 
