@@ -27,16 +27,17 @@ def fetch_emails():
     folder = None
     for account in ns.Folders:
         try:
-            if 'joel.coopersmith@accenture.com' in account.Name:
-                for sub in account.Folders:
-                    try:
-                        if 'RTX Weekly Team Punch List' in sub.Name:
-                            folder = sub
-                            break
-                    except Exception:
-                        continue
+            for sub in account.Folders:
+                try:
+                    if 'RTX Weekly Team Punch List' in sub.Name:
+                        folder = sub
+                        break
+                except Exception:
+                    continue
         except Exception:
             continue
+        if folder:
+            break
 
     if not folder:
         print("ERROR: Could not find 'RTX Weekly Team Punch List' folder.")
