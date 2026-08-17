@@ -35,3 +35,6 @@ publish/
 
 # BrowseMyPhone lives here as its own repo (github.com/joc00p/BrowseMyPhone)
 /BrowseMyPhone/
+
+# ResourcePerfEval lives here as its own repo (github.com/joc00p/ResourcePerfEval)
+/ResourcePerfEval/
