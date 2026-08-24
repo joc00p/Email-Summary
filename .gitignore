@@ -38,3 +38,6 @@ publish/
 
 # ResourcePerfEval lives here as its own repo (github.com/joc00p/ResourcePerfEval)
 /ResourcePerfEval/
+
+# SecurityTicTacToe lives here as its own repo (github.com/joc00p/SecurityTicTacToe)
+/SecurityTicTacToe/
