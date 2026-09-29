@@ -24,8 +24,12 @@ public class MainForm : Form
     private List<string>? _lastUpcoming;
     private string _lastWeekLabel = "";
 
+    private string _lastCacheKey = "";
+
     private ListBox _weekList = null!;
     private RichTextBox _reportBox = null!;
+    private Button _regenSummaryButton = null!;
+    private Button _regenExecButton = null!;
     private ToolStripMenuItem _generateMenuItem = null!;
     private ToolStripMenuItem _copyMenuItem = null!;
     private ToolStripMenuItem _saveMenuItem = null!;
@@ -66,6 +70,15 @@ public class MainForm : Form
     private static readonly Color DarkReportFg     = Color.FromArgb(220, 220, 220);
     private static readonly Color DarkAccent       = Color.FromArgb(100, 180, 255);
 
+    // Toolbar action buttons — the dark accent is too light to carry white button text.
+    private static readonly Color LightButtonBg    = Color.FromArgb(0, 84, 166);
+    private static readonly Color DarkButtonBg     = Color.FromArgb(38, 78, 120);
+
+    private static readonly string AppVersion =
+        System.Reflection.Assembly.GetExecutingAssembly().GetName().Version is { } v
+            ? $"{v.Major}.{v.Minor}.{v.Build}"
+            : "1.0.0";
+
     public MainForm()
     {
         _pptx = new PowerPointService(_appSettings.TemplatePath, _teamConfig);
@@ -76,7 +89,7 @@ public class MainForm : Form
 
     private void BuildUI()
     {
-        Text = "RTX Weekly Reporter";
+        Text = $"RTX Weekly Reporter {AppVersion}";
         Size = new Size(1100, 750);
         MinimumSize = new Size(800, 600);
         StartPosition = FormStartPosition.CenterScreen;
@@ -149,14 +162,28 @@ public class MainForm : Form
         menuStrip.Items.Add(toolsMenu);
         menuStrip.Items.Add(reportMenu);
 
-        // Toolbar — theme toggle only
+        // Toolbar — regenerate actions (hidden until a report is on screen) plus the theme toggle
         _toolbar = new Panel { Dock = DockStyle.Top, Height = 36 };
 
         _themeToggle = new ThemeToggle { Top = 6 };
         _themeToggle.ThemeChanged += ThemeBtn_Click;
 
+        _regenSummaryButton = MakeButton("Regenerate Summary", LightButtonBg);
+        _regenSummaryButton.Width = 165;
+        _regenSummaryButton.Top = 3;
+        _regenSummaryButton.Visible = false;
+        _regenSummaryButton.Click += async (_, _) => await RegenerateSectionAsync(executive: false);
+
+        _regenExecButton = MakeButton("Regenerate Exec Summary", LightButtonBg);
+        _regenExecButton.Width = 195;
+        _regenExecButton.Top = 3;
+        _regenExecButton.Visible = false;
+        _regenExecButton.Click += async (_, _) => await RegenerateSectionAsync(executive: true);
+
+        _toolbar.Controls.Add(_regenSummaryButton);
+        _toolbar.Controls.Add(_regenExecButton);
         _toolbar.Controls.Add(_themeToggle);
-        _toolbar.Resize += (_, _) => _themeToggle.Left = _toolbar.Width - _themeToggle.Width - 10;
+        _toolbar.Resize += (_, _) => LayoutToolbar();
 
         Controls.Add(menuStrip);
 
@@ -189,7 +216,7 @@ public class MainForm : Form
         {
             int dist = Math.Max(_split.Panel1MinSize, Math.Min(230, _split.Width - _split.Panel2MinSize - _split.SplitterWidth));
             _split.SplitterDistance = dist;
-            _themeToggle.Left = _toolbar.Width - _themeToggle.Width - 10;
+            LayoutToolbar();
             LoadEmails_Click(null, EventArgs.Empty);
         };
 
@@ -290,6 +317,33 @@ public class MainForm : Form
         _reportBox.ForeColor   = reportFg;
 
         _themeToggle.IsDark = _isDark;
+
+        var buttonBg = _isDark ? DarkButtonBg : LightButtonBg;
+        foreach (var b in new[] { _regenSummaryButton, _regenExecButton })
+        {
+            b.BackColor = buttonBg;
+            b.FlatAppearance.BorderColor = buttonBg;
+        }
+    }
+
+    // Right-aligned toolbar strip: theme toggle on the outside, regenerate actions inboard of it.
+    private void LayoutToolbar()
+    {
+        int right = _toolbar.Width - 10;
+        _themeToggle.Left = right - _themeToggle.Width;
+        right -= _themeToggle.Width + 14;
+        _regenExecButton.Left = right - _regenExecButton.Width;
+        right -= _regenExecButton.Width + 8;
+        _regenSummaryButton.Left = right - _regenSummaryButton.Width;
+    }
+
+    // The regenerate actions only make sense against a finished report — hidden while the pane
+    // is empty or showing raw email previews.
+    private void ShowReportActions(bool visible)
+    {
+        _regenSummaryButton.Visible = visible;
+        _regenExecButton.Visible = visible;
+        if (visible) LayoutToolbar();
     }
 
     private Color Accent => _isDark ? DarkAccent : LightAccent;
@@ -321,6 +375,8 @@ public class MainForm : Form
         _reportCache.Clear();
         _metricsCache.Clear();
         _upcomingCache.Clear();
+        _lastCacheKey = "";
+        ShowReportActions(false);
 
         try
         {
@@ -367,6 +423,8 @@ public class MainForm : Form
             _copyMenuItem.Enabled = true;
             _saveMenuItem.Enabled = true;
             _pptxMenuItem.Enabled = true;
+            _lastCacheKey = cacheKey;
+            ShowReportActions(true);
             SetStatus($"Cached report — {_lastWeekLabel}.");
             return;
         }
@@ -376,6 +434,8 @@ public class MainForm : Form
         _saveMenuItem.Enabled = false;
         _pptxMenuItem.Enabled = false;
         _copyMenuItem.Enabled = true;
+        _lastCacheKey = "";
+        ShowReportActions(false);
         ShowEmailPreviews(selectedWeeks);
     }
 
@@ -497,9 +557,11 @@ public class MainForm : Form
             _lastUpcoming = upcoming;
             ShowReport(report);
             _lastWeekLabel = weekLabel;
+            _lastCacheKey = cacheKey;
             _copyMenuItem.Enabled = true;
             _saveMenuItem.Enabled = true;
             _pptxMenuItem.Enabled = true;
+            ShowReportActions(true);
             SetStatus($"Report ready — {weekLabel}. {MetricsSummary(metrics)}");
         }
         catch (OperationCanceledException)
@@ -578,6 +640,159 @@ public class MainForm : Form
         }
     }
 
+    private async Task RegenerateSectionAsync(bool executive)
+    {
+        string heading = executive ? "Executive Summary" : "Summary";
+        string current = _reportBox.Text;
+        string towerSection = ExtractTeamUpdates(current);
+
+        if (string.IsNullOrWhiteSpace(towerSection))
+        {
+            MessageBox.Show(
+                "No tower updates found in the current report, so there is nothing to summarize.",
+                $"Regenerate {heading}", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        _cts?.Cancel();
+        var cts = new CancellationTokenSource();
+        _cts = cts;
+
+        SetBusy(true, $"Regenerating {heading.ToLowerInvariant()} for {_lastWeekLabel}...");
+
+        try
+        {
+            var body = executive
+                ? await _ollama.RegenerateExecutiveSummaryAsync(_lastWeekLabel, towerSection, cts.Token)
+                : await _ollama.RegenerateSummaryAsync(_lastWeekLabel, towerSection, cts.Token);
+            if (_cts != cts) return; // superseded by a newer run — let it own the UI
+
+            if (string.IsNullOrWhiteSpace(body))
+            {
+                SetStatus($"{heading} came back empty — report left unchanged.");
+                return;
+            }
+
+            var updated = ReplaceSection(current, heading, body);
+            ShowReport(updated);
+
+            // Keep the week's cache in step, or clicking away and back would resurrect the old text.
+            if (_lastCacheKey.Length > 0) _reportCache[_lastCacheKey] = updated;
+
+            SetStatus($"{heading} regenerated — {_lastWeekLabel}.");
+        }
+        catch (OperationCanceledException)
+        {
+            if (_cts == cts) SetStatus($"{heading} regeneration cancelled.");
+        }
+        catch (Exception ex)
+        {
+            if (_cts != cts) return; // superseded — don't clobber the newer run's state
+            MessageBox.Show($"Ollama error:\n\n{ex.Message}\n\nMake sure Ollama is running on localhost:11434.",
+                "Ollama Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            SetStatus($"Error regenerating {heading.ToLowerInvariant()}.");
+        }
+        finally
+        {
+            if (_cts == cts)
+            {
+                SetBusy(false, "");
+                _cts = null;
+            }
+            cts.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Pulls the per-tower bullets out of the report on screen so a regenerate re-summarizes
+    /// exactly what the user is looking at, whether it was generated this session or loaded
+    /// from disk. Falls back to everything above the closing sections when the
+    /// "### Team Updates" heading is missing (hand-edited or older reports).
+    /// </summary>
+    private static string ExtractTeamUpdates(string report)
+    {
+        var lines = report.Split('\n');
+
+        int start = -1;
+        for (int i = 0; i < lines.Length; i++)
+            if (lines[i].TrimStart().StartsWith("### Team Updates", StringComparison.OrdinalIgnoreCase))
+            {
+                start = i + 1;
+                break;
+            }
+
+        // No heading — start after the "## STATUS REPORT" title line, or at the top.
+        if (start < 0)
+        {
+            start = 0;
+            for (int i = 0; i < lines.Length; i++)
+                if (lines[i].TrimStart().StartsWith("## ", StringComparison.Ordinal)) { start = i + 1; break; }
+        }
+
+        var sb = new System.Text.StringBuilder();
+        for (int i = start; i < lines.Length; i++)
+        {
+            var t = lines[i].TrimStart();
+            if (t.StartsWith("##", StringComparison.Ordinal) || t.StartsWith("---", StringComparison.Ordinal)) break;
+            sb.AppendLine(lines[i].TrimEnd());
+        }
+        return sb.ToString().Trim();
+    }
+
+    /// <summary>
+    /// Swaps the body of a "### {heading}" section and leaves the rest of the report untouched.
+    /// A section runs until the next heading or horizontal rule. When the heading is absent it is
+    /// added — Summary above Executive Summary, anything else at the end.
+    /// </summary>
+    private static string ReplaceSection(string report, string heading, string newBody)
+    {
+        var lines = new List<string>(report.Split('\n'));
+        int start = IndexOfHeading(lines, heading);
+
+        if (start < 0)
+        {
+            int insertAt = lines.Count;
+            if (string.Equals(heading, "Summary", StringComparison.OrdinalIgnoreCase))
+            {
+                int exec = IndexOfHeading(lines, "Executive Summary");
+                if (exec >= 0) insertAt = exec;
+            }
+            var block = new List<string> { $"### {heading}" };
+            block.AddRange(newBody.Split('\n'));
+            block.Add("");
+            lines.InsertRange(insertAt, block);
+            return string.Join("\n", lines).TrimEnd();
+        }
+
+        int end = start + 1;
+        while (end < lines.Count)
+        {
+            var t = lines[end].TrimStart();
+            if (t.StartsWith("##", StringComparison.Ordinal) || t.StartsWith("---", StringComparison.Ordinal)) break;
+            end++;
+        }
+
+        var replacement = new List<string> { lines[start] };
+        replacement.AddRange(newBody.Split('\n'));
+        replacement.Add("");
+        lines.RemoveRange(start, end - start);
+        lines.InsertRange(start, replacement);
+        return string.Join("\n", lines).TrimEnd();
+    }
+
+    // Exact heading match, so "Summary" never lands on "### Executive Summary".
+    private static int IndexOfHeading(List<string> lines, string heading)
+    {
+        for (int i = 0; i < lines.Count; i++)
+        {
+            var t = lines[i].Trim();
+            if (t.StartsWith("###", StringComparison.Ordinal) &&
+                string.Equals(t.TrimStart('#').Trim(), heading, StringComparison.OrdinalIgnoreCase))
+                return i;
+        }
+        return -1;
+    }
+
     private void LoadReport_Click(object? sender, EventArgs e)
     {
         using var dlg = new OpenFileDialog
@@ -612,6 +827,7 @@ public class MainForm : Form
         // same behaviour as Report → Export PPTX from File.
         _lastMetrics = new TowerMetrics();
         _lastUpcoming = null;
+        _lastCacheKey = "";
         _lastWeekLabel = ExtractWeekLabelFromReport(reportText)
             ?? System.IO.Path.GetFileNameWithoutExtension(dlg.FileName);
 
@@ -619,6 +835,7 @@ public class MainForm : Form
         _copyMenuItem.Enabled = true;
         _saveMenuItem.Enabled = true;
         _pptxMenuItem.Enabled = true;
+        ShowReportActions(true);
         SetStatus($"Loaded {System.IO.Path.GetFileName(dlg.FileName)} — {_lastWeekLabel}.");
     }
 
@@ -800,6 +1017,8 @@ public class MainForm : Form
     private void SetBusy(bool busy, string msg)
     {
         _progress.Visible = busy;
+        _regenSummaryButton.Enabled = !busy;
+        _regenExecButton.Enabled = !busy;
         if (!string.IsNullOrEmpty(msg)) SetStatus(msg);
     }
 

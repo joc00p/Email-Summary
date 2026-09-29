@@ -170,6 +170,86 @@ public class OllamaService
         return CleanBulletSpacing(RemoveBannedPhrases(report.ToString()));
     }
 
+    // Shared preamble for the two closing sections, so a regenerate is held to the same rules
+    // as the original pass in BuildReportAsync.
+    private static string SectionPreamble(string weekLabel, string towerSection) => $"""
+        The period is: {weekLabel}
+
+        Tower updates (do NOT mention individual names — refer only to the tower names):
+        {towerSection}
+
+        Do NOT use the phrase "punch list" or "punch lists" anywhere in your response.
+        Do NOT mention any individual person's name. Refer only to the tower (SAP, Cloud, DBA SQL, ITIL Svc Mgmt, etc.).
+        Do NOT include any mention of risks, issues, blockers, or problems — omit them entirely.
+        """;
+
+    /// <summary>
+    /// Rewrites just the "### Summary" bullets from the report's tower updates, leaving the rest
+    /// of the report alone. Returns the bullet lines only — no heading.
+    /// </summary>
+    public async Task<string> RegenerateSummaryAsync(string weekLabel, string towerSection, CancellationToken ct)
+    {
+        StatusUpdate?.Invoke("Rewriting summary...");
+        var prompt = $"""
+            You are rewriting the Summary section of a team status report.
+
+            {SectionPreamble(weekLabel, towerSection)}
+
+            Output ONLY bullet lines starting with -. No heading, no intro text, no closing text.
+            Write 3 to 5 bullets covering overall team progress, key accomplishments, and items pending.
+            """;
+
+        var text = StripRiskLines(await CallOllama(prompt, ct));
+        var bullets = StripHeadingLines(RemoveBannedPhrases(text))
+            .Split('\n')
+            .Where(l => l.TrimStart().StartsWith('-') || l.TrimStart().StartsWith('•'))
+            .Select(l => "- " + l.TrimStart().TrimStart('-', '•', '*').Trim())
+            .Where(l => !IsFillerBullet(l))
+            .Take(6)
+            .ToList();
+
+        // The model occasionally answers in prose despite the instruction — fall back to
+        // bulleting its non-empty lines rather than blanking the section.
+        if (bullets.Count == 0)
+            bullets = StripHeadingLines(RemoveBannedPhrases(text))
+                .Split('\n')
+                .Select(l => l.Trim())
+                .Where(l => l.Length > 0 && !IsFillerBullet(l))
+                .Select(l => "- " + l)
+                .Take(5)
+                .ToList();
+
+        return string.Join("\n", bullets);
+    }
+
+    /// <summary>
+    /// Rewrites just the "### Executive Summary" prose from the report's tower updates.
+    /// Returns the paragraph only — no heading.
+    /// </summary>
+    public async Task<string> RegenerateExecutiveSummaryAsync(string weekLabel, string towerSection, CancellationToken ct)
+    {
+        StatusUpdate?.Invoke("Rewriting executive summary...");
+        var prompt = $"""
+            You are rewriting the Executive Summary section of a team status report.
+
+            {SectionPreamble(weekLabel, towerSection)}
+
+            Output ONLY the paragraph — no heading, no bullets, no intro text, no closing text.
+            Write 3-5 sentences of high-level professional prose for senior leadership. Write about what
+            was accomplished — the actual work, projects, and deliverables — not about which team or tower
+            did it. Do not use tower names as sentence subjects or anchors. Do not list, enumerate, or
+            organize the summary around towers.
+            """;
+
+        var text = StripRiskLines(await CallOllama(prompt, ct));
+        return StripHeadingLines(RemoveBannedPhrases(text)).Trim();
+    }
+
+    // Drops any "### Summary" style heading the model emits even when told not to — the caller
+    // supplies the heading when it splices the section back into the report.
+    private static string StripHeadingLines(string text) =>
+        string.Join("\n", text.Split('\n').Where(l => !l.TrimStart().StartsWith('#')));
+
     /// <summary>
     /// Pulls the server / database counts the towers report each week (SAP RISE/Xeta instances
     /// and servers, SQL databases, Cloud Total VMs) for the lower-right template table.
