@@ -92,6 +92,7 @@ public class MainForm : Form
         _saveMenuItem  = new ToolStripMenuItem("Save As...")   { Enabled = false };
         _pptxMenuItem  = new ToolStripMenuItem("Export PPTX")  { Enabled = false };
         var reloadItem = new ToolStripMenuItem("Reload")       { ShortcutKeys = Keys.F5 };
+        var loadReportItem = new ToolStripMenuItem("Load Report...") { ShortcutKeys = Keys.Control | Keys.O };
         var settingsItem = new ToolStripMenuItem("Settings");
 
         _copyMenuItem.Click   += (_, _) =>
@@ -102,12 +103,14 @@ public class MainForm : Form
         _saveMenuItem.Click   += SaveReport_Click;
         _pptxMenuItem.Click   += ExportPptx_Click;
         reloadItem.Click      += LoadEmails_Click;
+        loadReportItem.Click  += LoadReport_Click;
         settingsItem.Click    += Settings_Click;
 
         var fileMenu = new ToolStripMenuItem("File");
         fileMenu.DropDownItems.AddRange(new ToolStripItem[]
         {
             reloadItem,
+            loadReportItem,
             new ToolStripSeparator(),
             _copyMenuItem,
             _saveMenuItem,
@@ -551,7 +554,10 @@ public class MainForm : Form
 
     private void SaveReport_Click(object? sender, EventArgs e)
     {
-        var week = _weekList.SelectedItems.Count > 0 ? _weekList.SelectedItems[0] as string ?? "report" : "report";
+        // No week selected after Load Report — fall back to the loaded report's own label.
+        var week = _weekList.SelectedItems.Count > 0
+            ? _weekList.SelectedItems[0] as string ?? "report"
+            : (string.IsNullOrWhiteSpace(_lastWeekLabel) ? "report" : _lastWeekLabel);
         var safe = string.Join("_", week.Split(System.IO.Path.GetInvalidFileNameChars()));
         using var dlg = new SaveFileDialog
         {
@@ -570,6 +576,50 @@ public class MainForm : Form
             MessageBox.Show($"Could not save the report:\n\n{ex.Message}", "Save Error",
                 MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
+    }
+
+    private void LoadReport_Click(object? sender, EventArgs e)
+    {
+        using var dlg = new OpenFileDialog
+        {
+            Title = "Load Saved Report",
+            Filter = "Text File|*.txt|All Files|*.*",
+            CheckFileExists = true,
+        };
+        var startDir = _appSettings.EffectiveExportDir;
+        if (System.IO.Directory.Exists(startDir))
+            dlg.InitialDirectory = startDir;
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+
+        string reportText;
+        try
+        {
+            reportText = System.IO.File.ReadAllText(dlg.FileName);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Could not read the report:\n\n{ex.Message}", "Load Error",
+                MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+
+        // Drop the week selection first — the loaded text didn't come from that week's
+        // cache, and clearing afterwards would let SelectedIndexChanged overwrite it.
+        _weekList.ClearSelected();
+
+        // A report read back from disk carries no extracted metrics or curated
+        // activities, so the PPTX export falls back to the template's own values —
+        // same behaviour as Report → Export PPTX from File.
+        _lastMetrics = new TowerMetrics();
+        _lastUpcoming = null;
+        _lastWeekLabel = ExtractWeekLabelFromReport(reportText)
+            ?? System.IO.Path.GetFileNameWithoutExtension(dlg.FileName);
+
+        ShowReport(reportText);
+        _copyMenuItem.Enabled = true;
+        _saveMenuItem.Enabled = true;
+        _pptxMenuItem.Enabled = true;
+        SetStatus($"Loaded {System.IO.Path.GetFileName(dlg.FileName)} — {_lastWeekLabel}.");
     }
 
     // Clipboard access can fail transiently when another process holds the clipboard
